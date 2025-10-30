@@ -1,0 +1,42 @@
+# FastAPI & Web Server
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+pydantic==2.9.2
+pydantic-settings==2.6.0
+email-validator==2.1.0
+
+# Database & Storage
+supabase==2.9.0
+python-dotenv==1.0.1
+
+# ML Libraries - Classification & Regression
+scikit-learn==1.5.2
+numpy==1.26.4
+pandas==2.2.3
+
+# ML Libraries - Deep Learning
+torch==2.5.1
+torchvision==0.20.1
+tensorflow==2.18.0
+
+# ML Libraries - NLP
+transformers==4.46.2
+sentencepiece==0.2.0
+sacrebleu==2.4.3
+rouge-score==0.1.2
+
+# Computer Vision
+opencv-python==4.10.0.84
+pillow==11.0.0
+
+# Utilities
+requests==2.32.3
+aiofiles==24.1.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Visualization & Reporting
+matplotlib==3.9.2
+seaborn==0.13.2
+reportlab==4.2.5

@@ -1,0 +1,7 @@
+.eval-score-bar {
+  width: var(--bar-width);
+}
+
+.metric-bar {
+  height: var(--bar-height);
+}

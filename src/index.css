@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* EvalModel Enterprise - Neon Blue-Purple Gradient Theme */
+    --background: 240 30% 6%;
+    --foreground: 210 100% 98%;
+
+    --card: 240 25% 10%;
+    --card-foreground: 210 100% 98%;
+
+    --popover: 240 30% 8%;
+    --popover-foreground: 210 100% 98%;
+
+    /* Neon Blue Primary */
+    --primary: 220 100% 60%;
+    --primary-foreground: 240 30% 6%;
+    --primary-glow: 220 100% 70%;
+
+    /* Purple Accent */
+    --secondary: 270 60% 50%;
+    --secondary-foreground: 210 100% 98%;
+
+    --muted: 240 15% 12%;
+    --muted-foreground: 220 15% 70%;
+
+    /* Cyan-Purple Accent */
+    --accent: 280 80% 60%;
+    --accent-foreground: 240 30% 6%;
+
+    --destructive: 0 85% 60%;
+    --destructive-foreground: 210 100% 98%;
+
+    --border: 240 20% 18%;
+    --input: 240 20% 15%;
+    --ring: 220 100% 60%;
+
+    --radius: 1rem;
+
+    /* Neon Gradient tokens */
+    --gradient-primary: linear-gradient(135deg, hsl(220 100% 60%), hsl(280 80% 60%));
+    --gradient-secondary: linear-gradient(135deg, hsl(240 40% 12%), hsl(240 30% 8%));
+    --gradient-accent: linear-gradient(135deg, hsl(220 100% 60%), hsl(180 100% 50%));
+    --gradient-card: linear-gradient(135deg, hsl(240 25% 10% / 0.6), hsl(240 20% 8% / 0.6));
+    --gradient-glow: linear-gradient(135deg, hsl(220 100% 60% / 0.2), hsl(280 80% 60% / 0.2));
+    
+    /* Neon Glow effects */
+    --glow-primary: 0 0 30px hsl(220 100% 60% / 0.4);
+    --glow-secondary: 0 0 30px hsl(280 80% 60% / 0.4);
+    --glow-accent: 0 0 40px hsl(180 100% 50% / 0.3);
+    --shadow-elevated: 0 20px 60px -15px hsl(220 100% 60% / 0.3);
+    --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+
+    /* Sidebar */
+    --sidebar-background: 240 30% 8%;
+    --sidebar-foreground: 210 100% 98%;
+    --sidebar-primary: 220 100% 60%;
+    --sidebar-primary-foreground: 240 30% 6%;
+    --sidebar-accent: 240 20% 12%;
+    --sidebar-accent-foreground: 210 100% 98%;
+    --sidebar-border: 240 20% 15%;
+    --sidebar-ring: 220 100% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    background: linear-gradient(135deg, hsl(240 40% 8%), hsl(240 30% 6%));
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-card/60 backdrop-blur-2xl border border-border/50 rounded-2xl;
+    box-shadow: var(--shadow-glass), var(--glow-primary);
+  }
+  
+  .glow-border {
+    @apply border border-primary/40;
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3), inset 0 0 20px hsl(var(--primary) / 0.1);
+  }
+  
+  .glow-border-accent {
+    @apply border border-accent/40;
+    box-shadow: 0 0 20px hsl(var(--accent) / 0.3), inset 0 0 20px hsl(var(--accent) / 0.1);
+  }
+  
+  .btn-glow {
+    @apply transition-all duration-300;
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+  }
+  
+  .btn-glow:hover {
+    box-shadow: 0 0 30px hsl(var(--primary) / 0.5), 0 0 60px hsl(var(--primary) / 0.3);
+    transform: translateY(-2px);
+  }
+  
+  .metric-card {
+    @apply glass-card p-6 glow-border hover:border-primary/60 transition-all duration-300;
+  }
+  
+  .neon-text {
+    @apply bg-gradient-to-r from-primary via-accent to-primary bg-clip-text text-transparent;
+  }
+  
+  .gradient-border {
+    position: relative;
+    background: linear-gradient(var(--gradient-card));
+    border-radius: 1rem;
+  }
+  
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 1rem;
+    padding: 2px;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+}
