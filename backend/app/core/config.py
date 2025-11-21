@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     
+    # Database Configuration
+    DATABASE_URL: str = ""
+    
     # CORS - will be parsed from comma-separated string
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080"
     
@@ -24,15 +27,23 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 1024
     STORAGE_BUCKET_MODELS: str = "models"
     STORAGE_BUCKET_DATASETS: str = "datasets"
+    # Sensitive attributes detection (comma-separated). Update via environment for production.
+    SENSITIVE_ATTRIBUTES: str = "gender,race,sex,age_group,ethnicity,protected_attribute"
     
     model_config = SettingsConfigDict(
         env_file=".env",
-        case_sensitive=True
+        case_sensitive=True,
+        extra="ignore"  # Ignore extra fields from .env
     )
     
     @property
     def cors_origins(self) -> List[str]:
         """Parse ALLOWED_ORIGINS into a list"""
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
+
+    @property
+    def sensitive_attributes(self) -> List[str]:
+        """Return configured sensitive attribute candidate column names as a normalized list."""
+        return [s.strip().lower() for s in self.SENSITIVE_ATTRIBUTES.split(",") if s.strip()]
 
 settings = Settings()

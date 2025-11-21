@@ -45,11 +45,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .then((userData: any) => {
           setUser(userData);
         })
-        .catch(() => {
-          // Token invalid, clear it
+        .catch((error) => {
+          // Token invalid, clear everything
+          console.log('Token validation failed:', error.message);
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
           apiClient.setToken(null);
+          setUser(null);
         })
         .finally(() => {
           setLoading(false);

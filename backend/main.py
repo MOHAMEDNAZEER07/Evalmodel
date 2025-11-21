@@ -11,7 +11,7 @@ import os
 import logging
 import time
 
-from app.routes import models, evaluation, datasets, auth
+from app.routes import models, evaluation, datasets, auth, insights, test_storage
 from app.core.config import settings
 
 # Configure logging
@@ -76,6 +76,8 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(models.router, prefix="/api/models", tags=["Models"])
 app.include_router(datasets.router, prefix="/api/datasets", tags=["Datasets"])
 app.include_router(evaluation.router, prefix="/api/evaluation", tags=["Evaluation"])
+app.include_router(insights.router, prefix="/api/insights", tags=["Insights"])
+app.include_router(test_storage.router, prefix="/api/test", tags=["Testing"])
 
 # Global exception handler
 @app.exception_handler(Exception)

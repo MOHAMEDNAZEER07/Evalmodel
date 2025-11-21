@@ -72,7 +72,7 @@ class UserInDB(BaseModel):
     hashed_password: str
     tier: str = "free"
     created_at: datetime
-    model_count: int = 0
+    count: int = 0
 
 # ============= UTILITY FUNCTIONS =============
 

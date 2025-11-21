@@ -1,11 +1,13 @@
 """
-Evaluation Routes - SMCP Pipeline
+Evaluation Routes - SMCP Pipeline with Meta Evaluator and Explainability
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from typing import List
 import os
 import tempfile
 import logging
+import pandas as pd
+import numpy as np
 
 from app.core.supabase_client import get_supabase
 from app.core.config import settings
@@ -15,6 +17,9 @@ from app.models.schemas import (
 )
 from app.routes.auth import get_current_user
 from app.services.smcp_engine import smcp_engine
+from app.services.meta_evaluator import meta_evaluator
+from app.services.explainability import explainability_engine
+from app.services.fairness import fairness_engine
 from supabase import Client
 
 logger = logging.getLogger(__name__)
@@ -33,7 +38,7 @@ async def evaluate_model(
         # Get model metadata
         model_result = supabase.table("models")\
             .select("*")\
-            .eq("id", request.model_id)\
+            .eq("id", request.id)\
             .eq("user_id", current_user.get("id"))\
             .single()\
             .execute()
@@ -82,22 +87,184 @@ async def evaluate_model(
                 model_type=model_type,
                 framework=framework
             )
+            
+            # Load dataset for meta evaluator statistics
+            df = pd.read_csv(dataset_path)
+            
+            # Calculate dataset statistics for meta evaluator
+            dataset_stats = {
+                'n_rows': len(df),
+                'n_features': len(df.columns) - 1,  # Exclude target
+                'missing_values': df.isnull().sum().sum(),
+                'low_variance_fraction': 0.0,  # TODO: Calculate properly
+                'imbalance_ratio': 0.5  # TODO: Calculate for classification
+            }
+            
+            # If classification, calculate class imbalance
+            if model_type == ModelType.CLASSIFICATION:
+                # Assume last column is target
+                target_col = df.columns[-1]
+                value_counts = df[target_col].value_counts()
+                if len(value_counts) > 0:
+                    dataset_stats['imbalance_ratio'] = value_counts.max() / len(df)
+            
+            # Run Meta Evaluator
+            meta_result = meta_evaluator.evaluate(
+                metrics=metrics.model_dump(exclude_none=True),
+                dataset_stats=dataset_stats,
+                model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
+                train_metrics=None  # TODO: Pass train metrics if available
+            )
+            logger.info(f"Meta Evaluator result: meta_score={meta_result['meta_score']}, dataset_health={meta_result['dataset_health_score']}")
+            
+            # Prepare data for explainability and fairness analyses
+            feature_names = [col for col in df.columns if col != df.columns[-1]]
+            X = df[feature_names].values
+            split_idx = int(len(X) * 0.8)
+            X_train = X[:split_idx]
+            X_test = X[split_idx:]
+            
+            # Run Explainability Analysis
+            explainability_result = None
+            try:
+                # Load the model object for explainability
+                import pickle
+                with open(model_path, 'rb') as f:
+                    model_obj = pickle.load(f)
+                
+                explainability_result = explainability_engine.explain_model(
+                    model=model_obj,
+                    X_train=X_train,
+                    X_test=X_test,
+                    feature_names=feature_names,
+                    model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
+                    max_samples=100
+                )
+                logger.info(f"Explainability analysis completed: method={explainability_result.get('method_used')}")
+            except Exception as e:
+                logger.warning(f"Explainability analysis failed: {e}")
+                explainability_result = {"error": str(e), "method_used": None}
+            
+            # Run Fairness Analysis (if sensitive attribute is available)
+            fairness_result = None
+            try:
+                # Production-ready sensitive attribute detection priority:
+                # 1) Use `request.sensitive_attribute` if provided and present in dataset
+                # 2) Use dataset metadata field 'sensitive_attribute' or metadata->sensitive_attribute (if stored)
+                # 3) Use configured SENSITIVE_ATTRIBUTES list from settings (case-insensitive exact match)
+                # 4) Conservative fallback: do not auto-pick ambiguous categorical columns; log candidates and skip fairness
+                sensitive_attr_col = None
+
+                # 1) explicit from request
+                if getattr(request, 'sensitive_attribute', None):
+                    candidate = str(request.sensitive_attribute).strip()
+                    if candidate in df.columns:
+                        sensitive_attr_col = candidate
+                    else:
+                        logger.warning(f"Requested sensitive attribute '{candidate}' not found in dataset columns")
+
+                # 2) dataset metadata (supports `sensitive_attribute` field or JSON metadata)
+                if not sensitive_attr_col:
+                    # dataset may include direct column or a metadata json with sensitive_attribute key
+                    ds_meta = dataset.copy() if isinstance(dataset, dict) else {}
+                    # check top-level key
+                    if ds_meta.get('sensitive_attribute') and ds_meta.get('sensitive_attribute') in df.columns:
+                        sensitive_attr_col = ds_meta.get('sensitive_attribute')
+                    else:
+                        # check metadata json field if present
+                        metadata = ds_meta.get('metadata') if isinstance(ds_meta.get('metadata'), dict) else {}
+                        if metadata and metadata.get('sensitive_attribute') and metadata.get('sensitive_attribute') in df.columns:
+                            sensitive_attr_col = metadata.get('sensitive_attribute')
+
+                # 3) configured sensitive attributes list from settings
+                if not sensitive_attr_col:
+                    candidates = []
+                    configured = settings.sensitive_attributes
+                    for col in df.columns:
+                        if str(col).strip().lower() in configured:
+                            candidates.append(col)
+
+                    # If exactly one candidate matches the configured list, pick it. If multiple, choose the one with most non-null values.
+                    if len(candidates) == 1:
+                        sensitive_attr_col = candidates[0]
+                    elif len(candidates) > 1:
+                        # pick candidate with most non-null entries as heuristic
+                        best = None
+                        best_non_null = -1
+                        for c in candidates:
+                            non_null = int(df[c].notnull().sum())
+                            if non_null > best_non_null:
+                                best_non_null = non_null
+                                best = c
+                        sensitive_attr_col = best
+
+                # 4) Conservative fallback: do not auto-select ambiguous categorical columns in production
+                if not sensitive_attr_col:
+                    logger.info("No clear sensitive attribute detected via request, dataset metadata, or configured attributes. Skipping fairness analysis.")
+
+                if sensitive_attr_col:
+                    # Get predictions (need to reload or get from evaluation)
+                    target_col = df.columns[-1]
+                    y_true = np.asarray(df[target_col].values[split_idx:])
+                    
+                    # Get predictions from model
+                    import pickle
+                    with open(model_path, 'rb') as f:
+                        model_obj = pickle.load(f)
+                    
+                    y_pred = np.asarray(model_obj.predict(X_test))
+                    
+                    # Get sensitive attribute for test set
+                    sensitive_attr_test = np.asarray(df[sensitive_attr_col].values[split_idx:])
+                    
+                    # Run fairness analysis
+                    fairness_result = fairness_engine.analyze_fairness(
+                        y_true=y_true,
+                        y_pred=y_pred,
+                        sensitive_attr=sensitive_attr_test,
+                        model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression"
+                    )
+                    
+                    if fairness_result.get('analysis_successful'):
+                        fairness_result['sensitive_attribute'] = sensitive_attr_col
+                        logger.info(f"Fairness analysis completed: overall_score={fairness_result['fairness_metrics'].get('overall_fairness_score')}")
+                    else:
+                        logger.warning("Fairness analysis completed but no results")
+                        fairness_result = None
+                else:
+                    # sensitive_attr_col was not set; fairness_result already None
+                    fairness_result = None
+                    
+            except Exception as e:
+                logger.warning(f"Fairness analysis failed: {e}")
+                fairness_result = None
         
-        # Save evaluation results
+        # Save evaluation results with meta evaluator, explainability, and fairness data
         eval_data = {
-            "model_id": request.model_id,
+            "model_id": request.id,
             "dataset_id": request.dataset_id,
             "user_id": current_user.get("id"),
             "metrics": metrics.model_dump(exclude_none=True),
             "eval_score": eval_score.eval_score,
             "normalized_metrics": eval_score.normalized_metrics,
-            "weight_distribution": eval_score.weight_distribution
+            "weight_distribution": eval_score.weight_distribution,
+            "meta_score": meta_result["meta_score"],
+            "dataset_health_score": meta_result["dataset_health_score"],
+            "meta_flags": meta_result["flags"],
+            "meta_recommendations": meta_result["recommendations"],
+            "meta_verdict": meta_result["verdict"],
+            "feature_importance": explainability_result.get("feature_importance") if explainability_result else None,
+            "explainability_method": explainability_result.get("method_used") if explainability_result else None,
+            "shap_summary": explainability_result.get("shap_summary") if explainability_result else None,
+            "fairness_metrics": fairness_result.get("fairness_metrics") if fairness_result else None,
+            "group_metrics": fairness_result.get("group_metrics") if fairness_result else None,
+            "sensitive_attribute": fairness_result.get("sensitive_attribute") if fairness_result else None
         }
         
         # Check if evaluation exists, update or insert
         existing = supabase.table("evaluations")\
             .select("id")\
-            .eq("model_id", request.model_id)\
+            .eq("model_id", request.id)\
             .eq("dataset_id", request.dataset_id)\
             .execute()
         
@@ -113,11 +280,11 @@ async def evaluate_model(
         
         # Update model evaluation status
         supabase.table("models")\
-            .update({"is_evaluated": True})\
-            .eq("id", request.model_id)\
+            .update({"evaluated": True})\
+            .eq("id", request.id)\
             .execute()
         
-        logger.info(f"Model evaluated: {request.model_id}")
+        logger.info(f"Model evaluated: {request.id}")
         
         # Return full evaluation result
         evaluation = result.data[0]
@@ -125,10 +292,21 @@ async def evaluate_model(
             id=evaluation["id"],
             model_id=evaluation["model_id"],
             dataset_id=evaluation["dataset_id"],
-            model_type=model_type,
+            type=model_type,
             metrics=metrics,
             eval_score=eval_score,
-            evaluated_at=evaluation["evaluated_at"]
+            evaluated_at=evaluation["evaluated_at"],
+            meta_score=evaluation.get("meta_score"),
+            dataset_health_score=evaluation.get("dataset_health_score"),
+            meta_flags=evaluation.get("meta_flags"),
+            meta_recommendations=evaluation.get("meta_recommendations"),
+            meta_verdict=evaluation.get("meta_verdict"),
+            feature_importance=evaluation.get("feature_importance"),
+            explainability_method=evaluation.get("explainability_method"),
+            shap_summary=evaluation.get("shap_summary"),
+            fairness_metrics=evaluation.get("fairness_metrics"),
+            group_metrics=evaluation.get("group_metrics"),
+            sensitive_attribute=evaluation.get("sensitive_attribute")
         )
     
     except HTTPException:
@@ -137,13 +315,13 @@ async def evaluate_model(
         # Model loading or compatibility errors
         logger.error(f"Model compatibility error: {e}")
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Model compatibility issue: {str(e)}. Please ensure your model file is saved with a compatible Python version and framework."
         )
     except Exception as e:
         logger.error(f"Error during evaluation: {e}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Evaluation failed: {str(e)}"
         )
 
@@ -159,7 +337,7 @@ async def compare_models(
     try:
         # Get all models
         models = []
-        for model_id in request.model_ids:
+        for model_id in request.ids:
             model_result = supabase.table("models")\
                 .select("*")\
                 .eq("id", model_id)\
@@ -170,7 +348,7 @@ async def compare_models(
             if model_result.data:
                 models.append(model_result.data)
         
-        if len(models) != len(request.model_ids):
+        if len(models) != len(request.ids):
             raise HTTPException(status_code=404, detail="One or more models not found")
         
         # Evaluate each model if not already evaluated
@@ -188,7 +366,7 @@ async def compare_models(
             else:
                 # Trigger evaluation
                 eval_request = EvaluationRequest(
-                    model_id=model["id"],
+                    id=model["id"],
                     dataset_id=request.dataset_id
                 )
                 eval_response = await evaluate_model(eval_request, current_user, supabase)
@@ -226,7 +404,7 @@ async def compare_models(
                 id=evaluation["id"],
                 model_id=evaluation["model_id"],
                 dataset_id=evaluation["dataset_id"],
-                model_type=ModelType(model["model_type"]),
+                type=ModelType(model["model_type"]),
                 metrics=MetricsResult(**evaluation["metrics"]),
                 eval_score=EvalScoreResult(
                     eval_score=evaluation["eval_score"],

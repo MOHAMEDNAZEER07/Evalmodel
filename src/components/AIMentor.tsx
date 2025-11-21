@@ -22,7 +22,7 @@ export const AIMentor = ({ context }: AIMentorProps) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content: "👋 Hi! I'm your AI mentor for model evaluation. Ask me anything about ML metrics, model comparison, bias detection, or best practices!",
+      content: "👋 Hi! I'm your **General AI Assistant** for Data Science & Machine Learning.\n\n**I can help you with:**\n✅ ML/DL concepts, algorithms, and theory\n✅ Code examples and tutorials (Python, scikit-learn, PyTorch, TensorFlow)\n✅ Model architecture explanations (CNN, RNN, Transformers, etc.)\n✅ Data preprocessing and feature engineering techniques\n✅ Hyperparameter tuning best practices\n✅ General ML/DL questions and guidance\n\n**I CANNOT help with:**\n❌ Analyzing YOUR specific dataset or model\n❌ Reviewing YOUR model's performance metrics\n❌ YOUR data quality issues\n\n📊 **For YOUR specific data/model analysis**, go to the **Insights page** and use the sparkle ✨ button - that assistant has access to YOUR actual metrics!\n\nNow, what general ML/DL topic would you like to learn about?",
     },
   ]);
   const [input, setInput] = useState("");
@@ -148,8 +148,8 @@ export const AIMentor = ({ context }: AIMentorProps) => {
                 <Sparkles className="h-4 w-4 text-blue-400 absolute -top-1 -right-1 animate-pulse" />
               </div>
               <div>
-                <SheetTitle className="text-xl font-bold neon-text">AI Mentor</SheetTitle>
-                <p className="text-sm text-muted-foreground">Your ML evaluation assistant</p>
+                <SheetTitle className="text-xl font-bold neon-text">General AI Assistant</SheetTitle>
+                <p className="text-sm text-muted-foreground">ML/DL Expert & Data Science Helper</p>
               </div>
             </div>
           </div>
@@ -209,7 +209,7 @@ export const AIMentor = ({ context }: AIMentorProps) => {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Ask about metrics, models, or best practices..."
+                placeholder="Ask about ML/DL concepts, algorithms, best practices..."
                 className="flex-1 bg-background/50 border-white/20 focus:border-purple-500/50"
                 disabled={isLoading}
               />
@@ -223,7 +223,7 @@ export const AIMentor = ({ context }: AIMentorProps) => {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground mt-2 text-center">
-              Powered by Lovable AI
+              General ML/DL Knowledge • Powered by Gemini AI
             </p>
           </div>
         </div>

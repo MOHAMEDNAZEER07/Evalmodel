@@ -154,7 +154,7 @@ const Upload = () => {
         }
 
         formData.append('name', modelName);
-        formData.append('model_type', modelType);
+        formData.append('type', modelType);
         formData.append('framework', modelFramework);
         if (modelDescription) {
           formData.append('description', modelDescription);

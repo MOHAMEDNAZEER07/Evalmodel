@@ -43,7 +43,7 @@ class UserResponse(UserBase):
     id: str
     tier: UserTier
     created_at: datetime
-    model_count: int = 0
+    count: int = 0
     
     model_config = BASE_MODEL_CONFIG
 
@@ -51,7 +51,7 @@ class UserResponse(UserBase):
 class ModelUploadRequest(BaseModel):
     name: str
     description: Optional[str] = None
-    model_type: ModelType
+    type: ModelType
     framework: ModelFramework
     
 class ModelMetadata(BaseModel):
@@ -59,14 +59,18 @@ class ModelMetadata(BaseModel):
     user_id: str
     name: str
     description: Optional[str] = None
-    model_type: ModelType
+    type: ModelType = Field(alias='model_type')
     framework: ModelFramework
     file_path: str
     file_size: int
     uploaded_at: datetime
     is_evaluated: bool = False
     
-    model_config = BASE_MODEL_CONFIG
+    model_config = ConfigDict(
+        from_attributes=True,
+        protected_namespaces=(),
+        populate_by_name=True
+    )
 
 class ModelListResponse(BaseModel):
     models: List[ModelMetadata]
@@ -92,8 +96,10 @@ class DatasetMetadata(BaseModel):
 
 # Evaluation Schemas
 class EvaluationRequest(BaseModel):
-    model_id: str
+    id: str
     dataset_id: str
+    # Optional explicit sensitive attribute column name. If provided, it will be used when present in the dataset.
+    sensitive_attribute: Optional[str] = None
     
 class MetricsResult(BaseModel):
     # Classification
@@ -127,15 +133,26 @@ class EvaluationResult(BaseModel):
     id: str
     model_id: str
     dataset_id: str
-    model_type: ModelType
+    type: ModelType
     metrics: MetricsResult
     eval_score: EvalScoreResult
     evaluated_at: datetime
+    meta_score: Optional[float] = None
+    dataset_health_score: Optional[float] = None
+    meta_flags: Optional[List[str]] = None
+    meta_recommendations: Optional[List[Dict[str, Any]]] = None
+    meta_verdict: Optional[Dict[str, Any]] = None
+    feature_importance: Optional[List[Dict[str, Any]]] = None
+    explainability_method: Optional[str] = None
+    shap_summary: Optional[Dict[str, Any]] = None
+    fairness_metrics: Optional[Dict[str, Any]] = None
+    group_metrics: Optional[List[Dict[str, Any]]] = None
+    sensitive_attribute: Optional[str] = None
     
     model_config = BASE_MODEL_CONFIG
 
 class ComparisonRequest(BaseModel):
-    model_ids: List[str] = Field(min_length=2, max_length=10)
+    ids: List[str] = Field(min_length=2, max_length=10)
     dataset_id: str
 
 class ComparisonResult(BaseModel):

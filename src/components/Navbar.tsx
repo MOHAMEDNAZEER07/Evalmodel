@@ -1,8 +1,8 @@
-import { Search, Bot, Bell, User, Moon, Sun, LogIn } from "lucide-react";
+import { Search, Bot, Bell, User, Moon, Sun, LogIn, Database, Brain, BarChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -15,11 +15,65 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { globalSearchService } from "@/lib/global-search";
 
 const Navbar = () => {
   const [darkMode, setDarkMode] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{models: any[], datasets: any[]}>({ models: [], datasets: [] });
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+
+  // Global search - Cmd/Ctrl + K
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSearchOpen((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", down);
+    return () => document.removeEventListener("keydown", down);
+  }, []);
+
+  // Fetch search results
+  useEffect(() => {
+    const fetchSearchResults = async () => {
+      if (!searchQuery.trim() || !user) {
+        setSearchResults({ models: [], datasets: [] });
+        return;
+      }
+      
+      try {
+        const results = await globalSearchService.search({
+          query: searchQuery,
+          includeModels: true,
+          includeDatasets: true,
+          includeEvaluations: false,
+          limit: 5,
+        });
+        
+        setSearchResults({ 
+          models: results.models, 
+          datasets: results.datasets 
+        });
+      } catch (error) {
+        console.error('Search error:', error);
+      }
+    };
+    
+    const debounce = setTimeout(fetchSearchResults, 300);
+    return () => clearTimeout(debounce);
+  }, [searchQuery, user]);
 
   const handleSignOut = async () => {
     try {
@@ -41,8 +95,10 @@ const Navbar = () => {
           <div className="relative max-w-md w-full hidden md:block">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search models, datasets, metrics..."
-              className="pl-10 bg-muted/50 border-border/50 focus:border-primary/50 transition-colors"
+              placeholder="Search models, datasets... (Ctrl+K)"
+              className="pl-10 bg-muted/50 border-border/50 focus:border-primary/50 transition-colors cursor-pointer"
+              onClick={() => setSearchOpen(true)}
+              readOnly
             />
           </div>
         </div>
@@ -146,6 +202,75 @@ const Navbar = () => {
           )}
         </div>
       </div>
+
+      {/* Global Search Dialog */}
+      <CommandDialog open={searchOpen} onOpenChange={setSearchOpen}>
+        <CommandInput 
+          placeholder="Search models, datasets, evaluations..." 
+          value={searchQuery}
+          onValueChange={setSearchQuery}
+        />
+        <CommandList>
+          <CommandEmpty>No results found.</CommandEmpty>
+          
+          {searchResults.models.length > 0 && (
+            <CommandGroup heading="Models">
+              {searchResults.models.map((model: any) => (
+                <CommandItem
+                  key={model.id}
+                  onSelect={() => {
+                    navigate('/models');
+                    setSearchOpen(false);
+                  }}
+                >
+                  <Brain className="mr-2 h-4 w-4" />
+                  <div className="flex flex-col">
+                    <span>{model.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {model.framework} • {model.model_type}
+                    </span>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          
+          {searchResults.datasets.length > 0 && (
+            <CommandGroup heading="Datasets">
+              {searchResults.datasets.map((dataset: any) => (
+                <CommandItem
+                  key={dataset.id}
+                  onSelect={() => {
+                    navigate('/insights');
+                    setSearchOpen(false);
+                  }}
+                >
+                  <Database className="mr-2 h-4 w-4" />
+                  <div className="flex flex-col">
+                    <span>{dataset.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {dataset.row_count} rows
+                    </span>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          
+          {searchQuery && (searchResults.models.length > 0 || searchResults.datasets.length > 0) && (
+            <CommandGroup heading="Actions">
+              <CommandItem onSelect={() => { navigate('/models'); setSearchOpen(false); }}>
+                <BarChart className="mr-2 h-4 w-4" />
+                View all models
+              </CommandItem>
+              <CommandItem onSelect={() => { navigate('/upload'); setSearchOpen(false); }}>
+                <Database className="mr-2 h-4 w-4" />
+                View all datasets
+              </CommandItem>
+            </CommandGroup>
+          )}
+        </CommandList>
+      </CommandDialog>
     </nav>
   );
 };

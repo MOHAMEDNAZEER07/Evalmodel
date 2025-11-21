@@ -13,7 +13,7 @@ interface Model {
   id: string;
   name: string;
   description: string;
-  model_type: string;
+  type: string;
   framework: string;
   file_size: number;
   uploaded_at: string;
@@ -304,7 +304,7 @@ const Compare = () => {
                                   <div className="flex flex-col">
                                     <span className="font-medium">{model.name}</span>
                                     <span className="text-xs text-muted-foreground">
-                                      {model.framework} • {model.model_type} • {formatFileSize(model.file_size)}
+                                      {model.framework} • {model.type} • {formatFileSize(model.file_size)}
                                     </span>
                                   </div>
                                 </SelectItem>

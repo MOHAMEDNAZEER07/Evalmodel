@@ -12,6 +12,9 @@ import Upload from "./pages/Upload";
 import Evaluate from "./pages/Evaluate";
 import Compare from "./pages/Compare";
 import Insights from "./pages/Insights";
+import Explainability from "./pages/Explainability";
+import Fairness from "./pages/Fairness";
+import ModelRegistry from "./pages/ModelRegistry";
 import Pricing from "./pages/Pricing";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
@@ -56,10 +59,10 @@ const App = () => {
                       <Route path="/evaluate" element={<ProtectedRoute><Evaluate /></ProtectedRoute>} />
                       <Route path="/compare" element={<ProtectedRoute><Compare /></ProtectedRoute>} />
                       <Route path="/insights" element={<ProtectedRoute><Insights /></ProtectedRoute>} />
-                      <Route path="/explainability" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
-                      <Route path="/fairness" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
+                      <Route path="/explainability" element={<ProtectedRoute><Explainability /></ProtectedRoute>} />
+                      <Route path="/fairness" element={<ProtectedRoute><Fairness /></ProtectedRoute>} />
                       <Route path="/autotune" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
-                      <Route path="/registry" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
+                      <Route path="/registry" element={<ProtectedRoute><ModelRegistry /></ProtectedRoute>} />
                       <Route path="/team" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
                       <Route path="/reports" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
                       <Route path="/batch" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />

@@ -2,8 +2,11 @@ import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Target, TrendingUp, Activity, BarChart3, Database, Brain, Loader2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Target, TrendingUp, Activity, BarChart3, Database, Brain, Loader2, Sparkles } from "lucide-react";
 import MetricCard from "@/components/MetricCard";
+import { MetaEvaluatorResults } from "@/components/MetaEvaluatorResults";
+import { ExplainabilityDashboard } from "@/components/ExplainabilityDashboard";
 import { apiClient } from "@/lib/api-client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -12,7 +15,7 @@ interface Model {
   id: string;
   name: string;
   description: string;
-  model_type: string;
+  type: string;
   framework: string;
   file_size: number;
   uploaded_at: string;
@@ -28,6 +31,17 @@ interface Dataset {
   uploaded_at: string;
 }
 
+// Add type for dataset preview responses
+interface DatasetPreviewResponse {
+  columns?: string[];
+  rows?: Array<Record<string, any>>;
+  data?: Array<Record<string, any>>;
+  preview?: {
+    columns?: string[];
+    rows?: Array<Record<string, any>>;
+  };
+}
+
 // Add these response interfaces to narrow unknown API responses
 interface ListModelsResponse {
   models?: Model[];
@@ -35,6 +49,39 @@ interface ListModelsResponse {
 
 interface ListDatasetsResponse {
   datasets?: Dataset[];
+}
+
+interface EvaluationResult {
+  meta_score?: number;
+  dataset_health_score?: number;
+  meta_flags?: string[];
+  meta_recommendations?: { action: string; why: string; priority: string; }[];
+  meta_verdict?: {
+    status: string;
+    message: string;
+    confidence: number;
+    critical_issues: number;
+    total_issues: number;
+  };
+  metrics?: {
+    accuracy?: number;
+    precision?: number;
+    recall?: number;
+    f1_score?: number;
+    r2_score?: number;
+    mse?: number;
+    mae?: number;
+    rmse?: number;
+  };
+  eval_score?: number;
+  feature_importance?: Array<{ feature: string; importance: number; rank: number }>;
+  explainability_method?: string;
+  shap_summary?: {
+    mean_abs_shap?: number;
+    max_shap?: number;
+    top_features?: string[];
+    base_value?: number;
+  };
 }
 
 const Evaluate = () => {
@@ -45,6 +92,9 @@ const Evaluate = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
+  const [datasetColumns, setDatasetColumns] = useState<string[]>([]);
+  const [sensitiveAttribute, setSensitiveAttribute] = useState<string>('auto');
   
   const { user } = useAuth();
   const { toast } = useToast();
@@ -54,6 +104,45 @@ const Evaluate = () => {
       loadData();
     }
   }, [user]);
+
+  // When selectedDataset changes, fetch a small preview to extract column names
+  useEffect(() => {
+    const loadColumns = async () => {
+      setDatasetColumns([]);
+      setSensitiveAttribute('auto');
+      if (!selectedDataset) return;
+      try {
+        const previewRaw = await apiClient.previewDataset(selectedDataset, 1);
+        const preview = previewRaw as DatasetPreviewResponse | Array<Record<string, any>> | null;
+        
+        // Try to derive columns robustly from various possible shapes
+        let cols: string[] = [];
+        if (!preview) {
+          cols = [];
+        } else if (Array.isArray(preview)) {
+          if (preview.length > 0 && typeof preview[0] === 'object') cols = Object.keys(preview[0]);
+        } else if (preview.columns && Array.isArray(preview.columns)) {
+          cols = preview.columns;
+        } else if (preview.preview && preview.preview.columns) {
+          cols = preview.preview.columns;
+        } else if (preview.rows && Array.isArray(preview.rows) && preview.rows.length > 0) {
+          cols = Object.keys(preview.rows[0]);
+        } else if (preview.data && Array.isArray(preview.data) && preview.data.length > 0) {
+          cols = Object.keys(preview.data[0]);
+        } else if (typeof preview === 'object') {
+          cols = Object.keys(preview as Record<string, any>);
+        }
+
+        // Normalize and set
+        cols = cols.map(c => String(c));
+        setDatasetColumns(cols);
+      } catch (err) {
+        console.warn('Failed to preview dataset columns', err);
+      }
+    };
+
+    loadColumns();
+  }, [selectedDataset]);
 
   const loadData = async () => {
     try {
@@ -93,14 +182,18 @@ const Evaluate = () => {
 
     try {
       setIsEvaluating(true);
-      const result = await apiClient.evaluateModel(selectedModel, selectedDataset);
+  // Send the sensitive attribute only when the user picked a specific column.
+  const sensitiveToSend = sensitiveAttribute && sensitiveAttribute !== 'auto' ? sensitiveAttribute : undefined;
+  const result = (await apiClient.evaluateModel(selectedModel, selectedDataset, sensitiveToSend)) as EvaluationResult;
+      
+      setEvaluationResult(result);
+      setShowResults(true);
       
       toast({
         title: "Evaluation complete",
-        description: "Model evaluation finished successfully",
+        description: `Meta Score: ${result.meta_score?.toFixed(1) || 'N/A'}/100`,
       });
       
-      setShowResults(true);
       console.log('Evaluation result:', result);
     } catch (error) {
       console.error('Evaluation error:', error);
@@ -183,7 +276,7 @@ const Evaluate = () => {
                             <div className="flex flex-col">
                               <span className="font-medium">{model.name}</span>
                               <span className="text-xs text-muted-foreground">
-                                {model.framework} • {model.model_type} • {formatFileSize(model.file_size)}
+                                {model.framework} • {model.type} • {formatFileSize(model.file_size)}
                               </span>
                             </div>
                           </SelectItem>
@@ -203,6 +296,25 @@ const Evaluate = () => {
                     <Database className="h-4 w-4" />
                     Dataset ({datasets.length} available)
                   </label>
+                  {/** Sensitive attribute selector (optional) */}
+                  {datasetColumns.length > 0 && (
+                    <div className="mb-3">
+                      <label htmlFor="sensitive-attribute" className="block text-xs font-medium mb-1">Sensitive attribute (optional)</label>
+                      <select
+                        id="sensitive-attribute"
+                        aria-describedby="sensitive-attribute-help"
+                        className="w-full px-3 py-2 border rounded-md bg-background/50"
+                        value={sensitiveAttribute}
+                        onChange={(e) => setSensitiveAttribute(e.target.value)}
+                      >
+                        <option value="auto">Auto-detect (recommended)</option>
+                        {datasetColumns.map(col => (
+                          <option key={col} value={col}>{col}</option>
+                        ))}
+                      </select>
+                      <div id="sensitive-attribute-help" className="text-xs text-muted-foreground mt-1">If you want fairness measured on a specific column, choose it here. Otherwise leave Auto-detect.</div>
+                    </div>
+                  )}
                   <Select value={selectedDataset} onValueChange={setSelectedDataset}>
                     <SelectTrigger className="bg-background/50">
                       <SelectValue placeholder="Choose a dataset..." />
@@ -277,45 +389,201 @@ const Evaluate = () => {
         )}
 
         {/* Results */}
-        {showResults && (
+        {showResults && evaluationResult && (
           <div className="animate-fade-in">
-            <h2 className="text-2xl font-bold mb-6">Evaluation Results</h2>
-            
-            {/* Metrics */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-              <MetricCard title="Accuracy" value="94.2%" icon={Target} trend="+2.1%" trendUp />
-              <MetricCard title="Precision" value="92.8%" icon={TrendingUp} trend="+1.5%" trendUp />
-              <MetricCard title="Recall" value="91.5%" icon={Activity} trend="+3.2%" trendUp />
-              <MetricCard title="F1-Score" value="92.1%" icon={BarChart3} trend="+2.8%" trendUp />
+            <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+              <h2 className="text-2xl font-bold">Evaluation Results</h2>
+              <div className="flex items-center gap-3">
+                {evaluationResult.explainability_method && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                    <Brain className="h-4 w-4 text-blue-500" />
+                    <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                      {evaluationResult.explainability_method === 'SHAP' && 'SHAP Analysis'}
+                      {evaluationResult.explainability_method === 'LIME' && 'LIME Analysis'}
+                      {evaluationResult.explainability_method === 'basic' && 'Feature Importance'}
+                    </span>
+                  </div>
+                )}
+                {evaluationResult.meta_score !== null && evaluationResult.meta_score !== undefined && (
+                  <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg">
+                    <Sparkles className="h-5 w-5 text-primary" />
+                    <span className="text-sm font-medium">
+                      Meta Score: <span className="text-primary text-lg font-bold">{evaluationResult.meta_score.toFixed(1)}</span>/100
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Confusion Matrix */}
-            <Card className="glass-card p-8 mb-8">
-              <h3 className="text-xl font-semibold mb-6">Confusion Matrix</h3>
-              <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
-                <div className="metric-card text-center">
-                  <p className="text-sm text-muted-foreground mb-2">True Positive</p>
-                  <p className="text-3xl font-bold text-green-400">847</p>
+            <Tabs 
+              defaultValue={
+                evaluationResult.meta_score ? "meta" : 
+                evaluationResult.feature_importance ? "explainability" : 
+                "metrics"
+              } 
+              className="w-full"
+            >
+              <TabsList className="grid w-full max-w-2xl grid-cols-3 mb-6">
+                <TabsTrigger value="meta" disabled={!evaluationResult.meta_score}>
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  Meta Evaluator
+                  {!evaluationResult.meta_score && (
+                    <span className="ml-2 text-xs">(Not Available)</span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="explainability" disabled={!evaluationResult.feature_importance}>
+                  <Brain className="h-4 w-4 mr-2" />
+                  Explainability
+                  {!evaluationResult.feature_importance && (
+                    <span className="ml-2 text-xs">(Not Available)</span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="metrics">
+                  <BarChart3 className="h-4 w-4 mr-2" />
+                  Standard Metrics
+                </TabsTrigger>
+              </TabsList>
+
+              {/* Meta Evaluator Tab */}
+              <TabsContent value="meta" className="space-y-6">
+                {evaluationResult.meta_score ? (
+                  <MetaEvaluatorResults
+                    metaScore={evaluationResult.meta_score}
+                    datasetHealthScore={evaluationResult.dataset_health_score || 0}
+                    flags={evaluationResult.meta_flags || []}
+                    recommendations={evaluationResult.meta_recommendations || []}
+                    verdict={evaluationResult.meta_verdict || {
+                      status: "unknown",
+                      message: "No verdict available",
+                      confidence: 0,
+                      critical_issues: 0,
+                      total_issues: 0
+                    }}
+                    breakdown={{
+                      metric_contribution: evaluationResult.meta_score * 0.65 || 0,
+                      dataset_contribution: (evaluationResult.dataset_health_score || 0) * 0.25,
+                      complexity_contribution: evaluationResult.meta_score * 0.10 || 0
+                    }}
+                  />
+                ) : (
+                  <Card className="glass-card p-8 text-center">
+                    <div className="max-w-md mx-auto">
+                      <Sparkles className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+                      <h3 className="text-lg font-semibold mb-2">Meta Evaluator Not Available</h3>
+                      <p className="text-muted-foreground text-sm mb-4">
+                        The Meta Evaluator feature requires backend updates. Please ensure:
+                      </p>
+                      <ul className="text-sm text-muted-foreground text-left space-y-2">
+                        <li>✓ Database migration has been run</li>
+                        <li>✓ Backend server has been restarted</li>
+                        <li>✓ Re-run the evaluation after updates</li>
+                      </ul>
+                    </div>
+                  </Card>
+                )}
+              </TabsContent>
+
+              {/* Explainability Tab */}
+              <TabsContent value="explainability" className="space-y-6">
+                <ExplainabilityDashboard
+                  featureImportance={evaluationResult.feature_importance || null}
+                  explainabilityMethod={evaluationResult.explainability_method || null}
+                  shapSummary={evaluationResult.shap_summary || null}
+                />
+              </TabsContent>
+
+              {/* Standard Metrics Tab */}
+              <TabsContent value="metrics" className="space-y-6">
+                {/* Traditional Metrics Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {evaluationResult.metrics?.accuracy != null && (
+                    <MetricCard 
+                      title="Accuracy" 
+                      value={`${(evaluationResult.metrics.accuracy * 100).toFixed(1)}%`} 
+                      icon={Target} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.precision != null && (
+                    <MetricCard 
+                      title="Precision" 
+                      value={`${(evaluationResult.metrics.precision * 100).toFixed(1)}%`} 
+                      icon={TrendingUp} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.recall != null && (
+                    <MetricCard 
+                      title="Recall" 
+                      value={`${(evaluationResult.metrics.recall * 100).toFixed(1)}%`} 
+                      icon={Activity} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.f1_score != null && (
+                    <MetricCard 
+                      title="F1-Score" 
+                      value={`${(evaluationResult.metrics.f1_score * 100).toFixed(1)}%`} 
+                      icon={BarChart3} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.r2_score != null && (
+                    <MetricCard 
+                      title="R² Score" 
+                      value={evaluationResult.metrics.r2_score.toFixed(4)} 
+                      icon={Target} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.mse != null && (
+                    <MetricCard 
+                      title="MSE" 
+                      value={evaluationResult.metrics.mse.toFixed(4)} 
+                      icon={Activity} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.mae != null && (
+                    <MetricCard 
+                      title="MAE" 
+                      value={evaluationResult.metrics.mae.toFixed(4)} 
+                      icon={TrendingUp} 
+                    />
+                  )}
+                  {evaluationResult.metrics?.rmse != null && (
+                    <MetricCard 
+                      title="RMSE" 
+                      value={evaluationResult.metrics.rmse.toFixed(4)} 
+                      icon={BarChart3} 
+                    />
+                  )}
                 </div>
-                <div className="metric-card text-center">
-                  <p className="text-sm text-muted-foreground mb-2">False Positive</p>
-                  <p className="text-3xl font-bold text-yellow-400">52</p>
-                </div>
-                <div className="metric-card text-center">
-                  <p className="text-sm text-muted-foreground mb-2">False Negative</p>
-                  <p className="text-3xl font-bold text-orange-400">68</p>
-                </div>
-                <div className="metric-card text-center">
-                  <p className="text-sm text-muted-foreground mb-2">True Negative</p>
-                  <p className="text-3xl font-bold text-green-400">923</p>
-                </div>
-              </div>
-            </Card>
+
+                {/* Eval Score */}
+                {evaluationResult.eval_score != null && (
+                  <Card className="glass-card p-8">
+                    <h3 className="text-xl font-semibold mb-4">SMCP Eval Score</h3>
+                    <div className="flex items-center gap-4">
+                      <div className="text-4xl font-bold text-primary">
+                        {typeof evaluationResult.eval_score === 'object' && evaluationResult.eval_score !== null
+                          ? ((evaluationResult.eval_score as any)?.eval_score?.toFixed(1) ?? 'N/A')
+                          : (typeof evaluationResult.eval_score === 'number' ? evaluationResult.eval_score.toFixed(1) : 'N/A')}
+                      </div>
+                      <div className="text-2xl text-muted-foreground">/100</div>
+                    </div>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
 
             {/* Actions */}
-            <div className="flex gap-4">
+            <div className="flex gap-4 mt-8">
               <Button className="btn-glow flex-1">Download Report</Button>
               <Button variant="outline" className="flex-1">Compare Models</Button>
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setShowResults(false);
+                  setEvaluationResult(null);
+                }}
+              >
+                New Evaluation
+              </Button>
             </div>
           </div>
         )}

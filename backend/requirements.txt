@@ -14,6 +14,7 @@ python-dotenv==1.0.1
 scikit-learn==1.5.2
 numpy==1.26.4
 pandas==2.2.3
+scipy==1.11.4
 
 # ML Libraries - Deep Learning
 torch==2.5.1
@@ -40,3 +41,7 @@ passlib[bcrypt]==1.7.4
 matplotlib==3.9.2
 seaborn==0.13.2
 reportlab==4.2.5
+
+# Explainability & Interpretability
+shap==0.45.0
+lime==0.2.0.1
