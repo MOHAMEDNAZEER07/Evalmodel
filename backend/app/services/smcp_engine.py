@@ -4,8 +4,11 @@ Core evaluation engine for universal ML model evaluation
 """
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Tuple, Optional, TYPE_CHECKING
+from typing import Dict, Any, Tuple, Optional, TYPE_CHECKING, List
 import pickle
+import joblib
+import json
+import os
 import torch
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
@@ -21,6 +24,93 @@ if TYPE_CHECKING:
 	# This will not execute at runtime and won't cause import errors in environments
 	# where onnxruntime isn't installed.
 	import onnxruntime as ort  # type: ignore
+
+
+class ONNXModelWrapper:
+    """
+    Wrapper for ONNX models to provide sklearn-like predict() interface.
+    
+    ONNX models are framework-agnostic and version-independent, making them
+    ideal for long-term model storage and cross-platform deployment.
+    
+    Benefits over pickle/joblib:
+    - Works across Python versions
+    - Works without scikit-learn installed
+    - Fast, optimized inference via onnxruntime
+    - Stable long-term storage
+    """
+    
+    def __init__(self, session, feature_order: Optional[List[str]] = None):
+        """
+        Initialize ONNX model wrapper.
+        
+        Args:
+            session: onnxruntime.InferenceSession
+            feature_order: Optional list of feature names in correct order
+        """
+        self.session = session
+        self.feature_order = feature_order
+        self.input_name = session.get_inputs()[0].name
+        self.output_names = [o.name for o in session.get_outputs()]
+        
+        # Log model info
+        logger.info(f"ONNX model loaded - Input: {self.input_name}, Outputs: {self.output_names}")
+    
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """
+        Make predictions using the ONNX model.
+        
+        Args:
+            X: Input features as numpy array (must be float32)
+            
+        Returns:
+            Predictions as numpy array
+        """
+        # Ensure correct dtype (ONNX requires float32)
+        X = np.asarray(X, dtype=np.float32)
+        
+        # Run inference
+        outputs = self.session.run(None, {self.input_name: X})
+        
+        # First output is typically the prediction (label for classifiers)
+        return np.array(outputs[0]).ravel()
+    
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """
+        Get prediction probabilities for classification models.
+        
+        Args:
+            X: Input features as numpy array
+            
+        Returns:
+            Probability array of shape (n_samples, n_classes)
+        """
+        X = np.asarray(X, dtype=np.float32)
+        outputs = self.session.run(None, {self.input_name: X})
+        
+        # Second output is typically probabilities for sklearn classifiers
+        if len(outputs) > 1:
+            proba = outputs[1]
+            # Handle ZipMap output format (list of dicts)
+            if isinstance(proba, list) and len(proba) > 0 and isinstance(proba[0], dict):
+                # Convert list of dicts to numpy array
+                classes = sorted(proba[0].keys())
+                proba = np.array([[p[c] for c in classes] for p in proba])
+            return np.array(proba)
+        
+        # Fallback: return predictions as one-hot if no proba output
+        preds = outputs[0]
+        return np.array(preds)
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get ONNX model metadata."""
+        return {
+            "input_name": self.input_name,
+            "output_names": self.output_names,
+            "input_shape": self.session.get_inputs()[0].shape,
+            "feature_order": self.feature_order
+        }
+
 
 class SMCPEngine:
     """Standardized Model Comparison Pipeline Engine"""
@@ -53,6 +143,7 @@ class SMCPEngine:
     def __init__(self):
         self.supported_extensions = {
             ".pkl": ModelFramework.SKLEARN,
+            ".joblib": ModelFramework.SKLEARN,
             ".pt": ModelFramework.PYTORCH,
             ".pth": ModelFramework.PYTORCH,
             ".h5": ModelFramework.KERAS,
@@ -67,10 +158,19 @@ class SMCPEngine:
     
     def load_model(self, file_path: str, framework: ModelFramework):
         """Load model based on framework with multiple fallback methods"""
+        import os
         try:
             if framework == ModelFramework.SKLEARN:
-                # Try multiple pickle loading methods for maximum compatibility
+                # Try multiple loading methods for maximum compatibility
                 errors = []
+                ext = os.path.splitext(file_path)[1].lower()
+                
+                # Method 0: Joblib (preferred for sklearn, better compression & slightly better compatibility)
+                try:
+                    return joblib.load(file_path)
+                except Exception as e0:
+                    errors.append(f"Joblib: {str(e0)}")
+                    logger.warning(f"Joblib load failed: {e0}, trying standard pickle")
                 
                 # Method 1: Standard pickle
                 try:
@@ -102,18 +202,20 @@ class SMCPEngine:
                         return pickle.load(f, fix_imports=True, encoding='latin1')
                 except Exception as e4:
                     errors.append(f"Fix imports: {str(e4)}")
-                    logger.error(f"All pickle loading methods failed")
+                    logger.error(f"All loading methods failed")
                     
                     # If all methods fail, provide detailed error
-                    error_msg = "Failed to load pickle file. Attempts:\n" + "\n".join(f"  - {err}" for err in errors)
+                    error_msg = "Failed to load model file. Attempts:\n" + "\n".join(f"  - {err}" for err in errors)
                     raise ValueError(
                         f"{error_msg}\n\n"
                         f"The model file may be:\n"
                         f"  1. Created with an incompatible Python version\n"
                         f"  2. Corrupted during upload\n"
-                        f"  3. Not a valid scikit-learn pickle file\n\n"
-                        f"Solution: Create a new model file with Python 3.11 and re-upload.\n"
-                        f"You can use the 'create_test_model.py' script in the backend folder."
+                        f"  3. Not a valid scikit-learn model file\n\n"
+                        f"Solutions:\n"
+                        f"  - Save with joblib: joblib.dump(model, 'model.joblib')\n"
+                        f"  - Use ONNX format for best cross-version compatibility\n"
+                        f"  - Ensure same Python & scikit-learn versions as the backend"
                     )
             
             elif framework == ModelFramework.PYTORCH:
@@ -132,15 +234,22 @@ class SMCPEngine:
                 # Use dynamic import so static analyzers won't fail when onnxruntime
                 # is not installed in the environment. Provide a clear error if missing.
                 try:
-                    import importlib
-                    ort = importlib.import_module("onnxruntime")
-                except Exception as e:
+                    import onnxruntime as ort
+                except ImportError as e:
                     logger.error("onnxruntime is not installed or could not be imported.")
                     raise ValueError(
                         "onnxruntime is required to load ONNX models. "
                         "Install it in your environment with: pip install onnxruntime"
                     ) from e
-                return ort.InferenceSession(file_path)
+                
+                # Create inference session with optimizations
+                sess_options = ort.SessionOptions()
+                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                
+                session = ort.InferenceSession(file_path, sess_options)
+                
+                # Return a wrapper that provides predict() interface for compatibility
+                return ONNXModelWrapper(session)
             
             else:
                 raise ValueError(f"Unsupported framework: {framework}")
@@ -170,6 +279,12 @@ class SMCPEngine:
         try:
             # Get predictions based on framework
             if framework == ModelFramework.SKLEARN:
+                y_pred = model.predict(X_test)
+            
+            elif framework == ModelFramework.ONNX:
+                # ONNX models use the wrapper with predict() interface
+                # Ensure float32 dtype for ONNX
+                X_test = np.asarray(X_test, dtype=np.float32)
                 y_pred = model.predict(X_test)
             
             elif framework == ModelFramework.PYTORCH:
@@ -209,6 +324,11 @@ class SMCPEngine:
         try:
             # Get predictions
             if framework == ModelFramework.SKLEARN:
+                y_pred = model.predict(X_test)
+            
+            elif framework == ModelFramework.ONNX:
+                # ONNX models use the wrapper with predict() interface
+                X_test = np.asarray(X_test, dtype=np.float32)
                 y_pred = model.predict(X_test)
             
             elif framework == ModelFramework.PYTORCH:

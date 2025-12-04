@@ -5,6 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Bot, Send, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
+import ReactMarkdown from "react-markdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -177,7 +178,57 @@ export const AIMentor = ({ context }: AIMentorProps) => {
                         : "bg-gradient-to-r from-purple-600 to-blue-600 text-white"
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                    {message.role === "assistant" ? (
+                      <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-purple-400 prose-strong:font-semibold">
+                        <ReactMarkdown
+                          components={{
+                            strong: ({ children }) => (
+                              <strong className="font-bold text-purple-400">{children}</strong>
+                            ),
+                            h1: ({ children }) => (
+                              <h1 className="text-lg font-bold mt-3 mb-2">{children}</h1>
+                            ),
+                            h2: ({ children }) => (
+                              <h2 className="text-base font-bold mt-3 mb-2">{children}</h2>
+                            ),
+                            h3: ({ children }) => (
+                              <h3 className="text-sm font-bold mt-2 mb-1">{children}</h3>
+                            ),
+                            ul: ({ children }) => (
+                              <ul className="list-disc pl-4 my-2 space-y-1">{children}</ul>
+                            ),
+                            ol: ({ children }) => (
+                              <ol className="list-decimal pl-4 my-2 space-y-1">{children}</ol>
+                            ),
+                            li: ({ children }) => (
+                              <li className="text-sm">{children}</li>
+                            ),
+                            p: ({ children }) => (
+                              <p className="my-1.5">{children}</p>
+                            ),
+                            code: ({ children }) => (
+                              <code className="bg-purple-500/20 px-1.5 py-0.5 rounded text-xs font-mono text-purple-300">{children}</code>
+                            ),
+                            pre: ({ children }) => (
+                              <pre className="bg-black/30 p-2 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote className="border-l-2 border-purple-500 pl-3 my-2 italic text-muted-foreground">{children}</blockquote>
+                            ),
+                            a: ({ href, children }) => (
+                              <a href={href} className="text-purple-400 underline hover:text-purple-300" target="_blank" rel="noopener noreferrer">{children}</a>
+                            ),
+                            em: ({ children }) => (
+                              <em className="italic text-muted-foreground">{children}</em>
+                            ),
+                          }}
+                        >
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                    )}
                   </div>
                   {message.role === "user" && (
                     <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center flex-shrink-0 text-white font-semibold text-sm">

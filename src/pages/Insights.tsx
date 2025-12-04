@@ -1,7 +1,6 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Brain, MessageSquare, TrendingUp, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Database, Target, BarChart3 } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { Brain, TrendingUp, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Database, Target, BarChart3 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -43,11 +42,9 @@ interface Evaluation {
 }
 
 const Insights = () => {
-  const [chatInput, setChatInput] = useState("");
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loadingDatasets, setLoadingDatasets] = useState(true);
-  const [aiChatOpen, setAiChatOpen] = useState(false);
   const [insightType, setInsightType] = useState<"dataset" | "model">("dataset");
   
   // Model insights state
@@ -338,76 +335,27 @@ const Insights = () => {
         </Tabs>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* AI Chat Assistant */}
+          {/* AI Chat Assistant - Inline */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Ask EvalModel - Demo Card (will be replaced by InsightsAIChat at bottom) */}
+            {/* Ask EvalModel - Inline Chat */}
             <Card className="glass-card p-8 animate-fade-in-up">
-              <div className="flex items-center gap-3 mb-6">
-                <Brain className="h-6 w-6 text-primary animate-glow-pulse" />
-                <h2 className="text-xl font-semibold">Ask EvalModel</h2>
-                <Badge className="bg-accent text-accent-foreground">
-                  {insightType === "dataset" ? "Dataset Analysis" : "Model Analysis"}
-                </Badge>
-              </div>
-
-              <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
-                {/* Sample conversation */}
-                <div className="flex gap-3">
-                  <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center flex-shrink-0">
-                    <MessageSquare className="h-4 w-4 text-primary-foreground" />
-                  </div>
-                  <div className="flex-1 bg-muted/50 rounded-xl p-4">
-                    <p className="text-sm">Which feature causes most misclassifications in the BERT model?</p>
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                    <Brain className="h-4 w-4 text-primary" />
-                  </div>
-                  <div className="flex-1 bg-primary/10 border border-primary/30 rounded-xl p-4">
-                    <p className="text-sm mb-3">
-                      Based on the analysis, the <span className="font-semibold text-primary">age</span> feature causes 34% of misclassifications in your BERT model. This is primarily due to:
-                    </p>
-                    <ul className="text-sm space-y-1 text-muted-foreground ml-4">
-                      <li>• High variance in age distribution (18-82 years)</li>
-                      <li>• 23 outliers detected in the age column</li>
-                      <li>• Non-linear relationship with target variable</li>
-                    </ul>
-                    <div className="mt-4">
-                      <Button size="sm" variant="outline" className="border-primary/50">
-                        View Feature Analysis
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Ask about your data, models, or metrics..."
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter' && chatInput.trim()) {
-                      setAiChatOpen(true);
-                    }
-                  }}
-                  className="bg-muted/50 border-border/50 focus:border-primary/50"
-                />
-                <Button 
-                  className="btn-glow"
-                  onClick={() => {
-                    if (chatInput.trim()) {
-                      setAiChatOpen(true);
-                    }
-                  }}
-                  disabled={!chatInput.trim()}
-                >
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Ask
-                </Button>
-              </div>
+              <InsightsAIChat
+                inline={true}
+                insightType={insightType}
+                // Dataset props
+                datasetName={selectedDataset?.name}
+                qualityScore={overallQualityScore}
+                outlierCount={outliersData?.affected_features}
+                correlationCount={correlationData.length}
+                issues={dataQualityIssues}
+                summary={summary?.summary}
+                // Model props
+                modelName={models.find(m => m.id === selectedModelId)?.name}
+                modelType={models.find(m => m.id === selectedModelId)?.model_type}
+                modelFramework={models.find(m => m.id === selectedModelId)?.framework}
+                evalScore={modelEvaluation?.eval_score}
+                modelMetrics={modelEvaluation?.metrics}
+              />
             </Card>
 
             {/* Dataset Insights: Data Quality Dashboard */}
@@ -900,40 +848,6 @@ const Insights = () => {
           </div>
         </div>
       </div>
-
-      {/* AI Chat Assistant - Floating Button */}
-      <InsightsAIChat
-        insightType={insightType}
-        // Dataset props
-        datasetName={selectedDataset?.name}
-        qualityScore={overallQualityScore}
-        outlierCount={outliersData?.affected_features}
-        correlationCount={correlationData.length}
-        issues={dataQualityIssues}
-        summary={summary?.summary}
-        // Model props
-        modelName={models.find(m => m.id === selectedModelId)?.name}
-        modelType={models.find(m => m.id === selectedModelId)?.model_type}
-        modelFramework={models.find(m => m.id === selectedModelId)?.framework}
-        evalScore={modelEvaluation?.eval_score}
-        modelMetrics={modelEvaluation?.metrics}
-        // Control props
-        initialQuestion={chatInput}
-        isOpen={aiChatOpen}
-        onOpenChange={(open) => {
-          setAiChatOpen(open);
-          if (!open) {
-            setChatInput(""); // Clear input when chat closes
-          }
-          // Debug logging when chat opens
-          if (open && insightType === "model") {
-            console.log("🔍 Insights Page Debug - Opening Model Chat");
-            console.log("🔍 Selected Model ID:", selectedModelId);
-            console.log("🔍 Model Evaluation:", modelEvaluation);
-            console.log("🔍 Model Metrics being passed:", modelEvaluation?.metrics);
-          }
-        }}
-      />
     </div>
   );
 };

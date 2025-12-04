@@ -12,9 +12,15 @@ python-dotenv==1.0.1
 
 # ML Libraries - Classification & Regression
 scikit-learn==1.5.2
+joblib>=1.3.0
 numpy==1.26.4
 pandas==2.2.3
 scipy==1.11.4
+
+# ONNX - Cross-platform model format (version-independent)
+onnx>=1.15.0
+onnxruntime>=1.16.0
+skl2onnx>=1.16.0
 
 # ML Libraries - Deep Learning
 torch==2.5.1

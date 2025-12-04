@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Brain, MessageSquare, Send, Loader2, X, Minimize2, Maximize2, Sparkles } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import ReactMarkdown from "react-markdown";
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL!,
@@ -43,6 +44,8 @@ interface InsightsAIChatProps {
     rmse?: number;
     r2_score?: number;
   };
+  // Display mode
+  inline?: boolean;
 }
 
 export function InsightsAIChat({
@@ -60,9 +63,10 @@ export function InsightsAIChat({
   modelType,
   modelFramework,
   evalScore,
-  modelMetrics
+  modelMetrics,
+  inline = false
 }: InsightsAIChatProps) {
-  const [isOpen, setIsOpen] = useState(externalIsOpen || false);
+  const [isOpen, setIsOpen] = useState(externalIsOpen || inline || false);
   const [isMinimized, setIsMinimized] = useState(false);
   
   // Dynamic welcome message based on insight type
@@ -162,13 +166,23 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
     }
   };
 
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (inline) {
+      // For inline mode, scroll within the container only
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    } else {
+      // For floating mode, use scrollIntoView
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, inline]);
 
   const buildContextMessage = () => {
     if (insightType === "model") {
@@ -373,7 +387,8 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
     setInput(question);
   };
 
-  if (!isOpen) {
+  // Floating button mode (when not inline and not open)
+  if (!isOpen && !inline) {
     return (
       <Button
         onClick={() => handleOpenChange(true)}
@@ -385,6 +400,178 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
     );
   }
 
+  // Inline mode - embedded in the page
+  if (inline) {
+    return (
+      <div className="flex flex-col h-[500px]">
+        {/* Header */}
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-border/50">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center">
+              <Brain className="h-5 w-5 text-primary-foreground animate-glow-pulse" />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold">Ask EvalModel</h2>
+              <Badge className="bg-accent/20 text-accent-foreground border-accent/30">
+                <Sparkles className="h-3 w-3 mr-1" />
+                {insightType === "model" ? "Analyzing YOUR Model" : "Analyzing YOUR Data"}
+              </Badge>
+            </div>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto space-y-4 pr-2">
+          {messages.map((message, idx) => (
+            <div
+              key={idx}
+              className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              {message.role === "assistant" && (
+                <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center flex-shrink-0">
+                  <Brain className="h-4 w-4 text-primary-foreground" />
+                </div>
+              )}
+              <div
+                className={`max-w-[85%] rounded-xl p-4 ${
+                  message.role === "user"
+                    ? "bg-gradient-to-r from-primary to-accent text-white"
+                    : "bg-muted/50 border border-border/50"
+                }`}
+              >
+                {message.role === "assistant" ? (
+                  <div className="text-sm prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-primary prose-strong:font-semibold">
+                    <ReactMarkdown
+                      components={{
+                        strong: ({ children }) => (
+                          <strong className="font-bold text-primary">{children}</strong>
+                        ),
+                        h1: ({ children }) => (
+                          <h1 className="text-lg font-bold mt-3 mb-2 text-foreground">{children}</h1>
+                        ),
+                        h2: ({ children }) => (
+                          <h2 className="text-base font-bold mt-3 mb-2 text-foreground">{children}</h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 className="text-sm font-bold mt-2 mb-1 text-foreground">{children}</h3>
+                        ),
+                        ul: ({ children }) => (
+                          <ul className="list-disc pl-4 my-2 space-y-1">{children}</ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol className="list-decimal pl-4 my-2 space-y-1">{children}</ol>
+                        ),
+                        li: ({ children }) => (
+                          <li className="text-sm">{children}</li>
+                        ),
+                        p: ({ children }) => (
+                          <p className="my-1.5">{children}</p>
+                        ),
+                        code: ({ children }) => (
+                          <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>
+                        ),
+                        pre: ({ children }) => (
+                          <pre className="bg-muted p-2 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>
+                        ),
+                        blockquote: ({ children }) => (
+                          <blockquote className="border-l-2 border-primary pl-3 my-2 italic text-muted-foreground">{children}</blockquote>
+                        ),
+                        a: ({ href, children }) => (
+                          <a href={href} className="text-primary underline hover:text-primary/80" target="_blank" rel="noopener noreferrer">{children}</a>
+                        ),
+                        em: ({ children }) => (
+                          <em className="italic text-muted-foreground">{children}</em>
+                        ),
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                )}
+                <span className={`text-xs mt-2 block ${message.role === "user" ? "text-white/70" : "opacity-50"}`}>
+                  {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              {message.role === "user" && (
+                <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center flex-shrink-0">
+                  <MessageSquare className="h-4 w-4 text-primary" />
+                </div>
+              )}
+            </div>
+          ))}
+          {isLoading && (
+            <div className="flex gap-3 justify-start">
+              <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center flex-shrink-0">
+                <Brain className="h-4 w-4 text-primary-foreground" />
+              </div>
+              <div className="bg-muted/50 border border-border/50 rounded-xl p-4">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-sm text-muted-foreground">Analyzing...</span>
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Quick Questions */}
+        {messages.length <= 1 && (
+          <div className="pt-4 pb-2">
+            <p className="text-xs text-muted-foreground mb-2">Quick questions:</p>
+            <div className="flex flex-wrap gap-2">
+              {quickQuestions.map((q, idx) => (
+                <Button
+                  key={idx}
+                  onClick={() => handleQuickQuestion(q)}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-8"
+                >
+                  {q}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Input */}
+        <div className="pt-4 border-t border-border/50 mt-4">
+          <div className="flex gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && sendMessage()}
+              placeholder={insightType === "model" 
+                ? "Ask about your model's performance, metrics, improvements..."
+                : "Ask about your data quality, outliers, correlations..."
+              }
+              disabled={isLoading}
+              className="bg-muted/50 border-border/50 focus:border-primary/50"
+            />
+            <Button
+              onClick={sendMessage}
+              disabled={isLoading || !input.trim()}
+              className="btn-glow"
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>
+                  <Send className="h-4 w-4 mr-2" />
+                  Ask
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Floating card mode (original behavior)
   return (
     <Card className={`fixed ${isMinimized ? 'bottom-6 right-6 w-80' : 'bottom-6 right-6 w-96 h-[600px]'} shadow-2xl flex flex-col z-50 glass-card glow-border-primary`}>
       {/* Header */}
@@ -438,17 +625,71 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
                 <div
                   className={`max-w-[80%] rounded-xl p-3 ${
                     message.role === "user"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-gradient-to-r from-primary to-accent text-white"
                       : "bg-muted/50 border border-border/50"
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                  <span className="text-xs opacity-50 mt-1 block">
+                  {message.role === "assistant" ? (
+                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-primary prose-strong:font-semibold">
+                      <ReactMarkdown
+                        components={{
+                          // Custom styling for markdown elements
+                          strong: ({ children }) => (
+                            <strong className="font-bold text-primary">{children}</strong>
+                          ),
+                          h1: ({ children }) => (
+                            <h1 className="text-lg font-bold mt-3 mb-2 text-foreground">{children}</h1>
+                          ),
+                          h2: ({ children }) => (
+                            <h2 className="text-base font-bold mt-3 mb-2 text-foreground">{children}</h2>
+                          ),
+                          h3: ({ children }) => (
+                            <h3 className="text-sm font-bold mt-2 mb-1 text-foreground">{children}</h3>
+                          ),
+                          ul: ({ children }) => (
+                            <ul className="list-disc pl-4 my-2 space-y-1">{children}</ul>
+                          ),
+                          ol: ({ children }) => (
+                            <ol className="list-decimal pl-4 my-2 space-y-1">{children}</ol>
+                          ),
+                          li: ({ children }) => (
+                            <li className="text-sm">{children}</li>
+                          ),
+                          p: ({ children }) => (
+                            <p className="my-1.5">{children}</p>
+                          ),
+                          code: ({ children }) => (
+                            <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>
+                          ),
+                          pre: ({ children }) => (
+                            <pre className="bg-muted p-2 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>
+                          ),
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-2 border-primary pl-3 my-2 italic text-muted-foreground">{children}</blockquote>
+                          ),
+                          hr: () => (
+                            <hr className="my-3 border-border" />
+                          ),
+                          a: ({ href, children }) => (
+                            <a href={href} className="text-primary underline hover:text-primary/80" target="_blank" rel="noopener noreferrer">{children}</a>
+                          ),
+                          em: ({ children }) => (
+                            <em className="italic text-muted-foreground">{children}</em>
+                          ),
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  )}
+                  <span className={`text-xs mt-1 block ${message.role === "user" ? "text-white/70" : "opacity-50"}`}>
                     {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
                 {message.role === "user" && (
-                  <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
+                  <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center flex-shrink-0">
                     <MessageSquare className="h-4 w-4 text-primary" />
                   </div>
                 )}
