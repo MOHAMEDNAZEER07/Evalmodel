@@ -8,7 +8,7 @@ The search functionality is now organized into reusable, modular components that
 
 ## Core Modules
 
-### 1. `src/lib/search.ts` - Search Utilities
+### 1. `frontend/src/lib/search.ts` - Search Utilities
 **Purpose:** Core search logic and utility functions
 
 **Functions:**
@@ -30,7 +30,7 @@ const results = searchItems(
 );
 ```
 
-### 2. `src/hooks/use-search.ts` - Search Hook
+### 2. `frontend/src/hooks/use-search.ts` - Search Hook
 **Purpose:** Reusable React hook for search functionality
 
 **Features:**
@@ -55,7 +55,7 @@ const {
 });
 ```
 
-### 3. `src/components/SearchBar.tsx` - Search Component
+### 3. `frontend/src/components/SearchBar.tsx` - Search Component
 **Purpose:** Reusable search UI component
 
 **Props:**

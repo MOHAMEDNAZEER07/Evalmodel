@@ -18,8 +18,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBearer()
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - configure bcrypt properly
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12,  # Explicit rounds
+    bcrypt__ident="2b"   # Use 2b variant (modern)
+)
 
 # JWT Configuration
 SECRET_KEY = "your-secret-key-change-this-in-production-use-env-variable"
@@ -39,10 +44,8 @@ class SignupRequest(BaseModel):
     def validate_password(cls, v: str) -> str:
         if len(v) < 6:
             raise ValueError('Password must be at least 6 characters long')
-        # Bcrypt has 72-byte limit, truncate if needed
-        if len(v.encode('utf-8')) > 72:
-            # Truncate to 70 chars to be safe
-            return v[:70]
+        if len(v) > 72:
+            raise ValueError('Password must be at most 72 characters long')
         return v
     
     model_config = ConfigDict(protected_namespaces=())
@@ -78,14 +81,16 @@ class UserInDB(BaseModel):
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
-    # Truncate to 72 characters max for bcrypt
-    plain_password = plain_password[:72]
+    # Bcrypt has 72-byte limit - truncate UTF-8 encoded bytes
+    if len(plain_password.encode('utf-8')) > 72:
+        plain_password = plain_password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
     """Hash a password"""
-    # Truncate to 72 characters max for bcrypt
-    password = password[:72]
+    # Bcrypt has 72-byte limit - truncate UTF-8 encoded bytes
+    if len(password.encode('utf-8')) > 72:
+        password = password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

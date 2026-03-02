@@ -206,8 +206,12 @@ class ExplainabilityEngine:
         try:
             # Try TreeExplainer first (fastest for tree-based models)
             try:
-                return self.shap.TreeExplainer(model)
-            except:
+                explainer = self.shap.TreeExplainer(model)
+                # Test explainer to catch pickle errors early
+                _ = explainer.shap_values(X_train[:1])
+                return explainer
+            except Exception as e:
+                logger.debug(f"TreeExplainer failed: {e}")
                 pass
             
             # Try KernelExplainer (model-agnostic, slower)
@@ -220,13 +224,15 @@ class ExplainabilityEngine:
                 # Use subset of training data as background
                 background = self.shap.sample(X_train, min(50, len(X_train)))
                 return self.shap.KernelExplainer(predict_fn, background)
-            except:
+            except Exception as e:
+                logger.debug(f"KernelExplainer failed: {e}")
                 pass
             
             # Try LinearExplainer (for linear models)
             try:
                 return self.shap.LinearExplainer(model, X_train)
-            except:
+            except Exception as e:
+                logger.debug(f"LinearExplainer failed: {e}")
                 pass
             
             return None

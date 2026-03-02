@@ -90,13 +90,13 @@ backend/
 
 ### ✅ Completed
 
-#### 1. **API Client** (`src/lib/api-client.ts`)
+#### 1. **API Client** (`frontend/src/lib/api-client.ts`)
 - Complete TypeScript client for all backend endpoints
 - Token management
 - Error handling
 - FormData support for file uploads
 
-#### 2. **Enhanced Upload Page** (`src/pages/Upload.tsx`)
+#### 2. **Enhanced Upload Page** (`frontend/src/pages/Upload.tsx`)
 - **Dual-mode upload**: Model OR Dataset
 - **Tabs interface**: Clean switch between upload types
 - **Drag & drop** support for files
@@ -110,14 +110,14 @@ backend/
 - **Authentication**: Gets Supabase session token before upload
 
 #### 3. **Existing Pages** (Already present, ready to enhance)
-- Dashboard (`src/pages/Dashboard.tsx`) - Shows metrics and recent evaluations
-- Evaluate (`src/pages/Evaluate.tsx`) - Placeholder, needs SMCP integration
-- Compare (`src/pages/Compare.tsx`) - Placeholder, needs comparison UI
-- Insights (`src/pages/Insights.tsx`) - Placeholder
-- Pricing (`src/pages/Pricing.tsx`) - Needs mock Stripe UI
+- Dashboard (`frontend/src/pages/Dashboard.tsx`) - Shows metrics and recent evaluations
+- Evaluate (`frontend/src/pages/Evaluate.tsx`) - Placeholder, needs SMCP integration
+- Compare (`frontend/src/pages/Compare.tsx`) - Placeholder, needs comparison UI
+- Insights (`frontend/src/pages/Insights.tsx`) - Placeholder
+- Pricing (`frontend/src/pages/Pricing.tsx`) - Needs mock Stripe UI
 
 #### 4. **UI Components** (shadcn/ui - All ready to use)
-- Complete component library in `src/components/ui/`
+- Complete component library in `frontend/src/components/ui/`
 - Charts (Recharts ready for metrics visualization)
 - Forms, tables, dialogs, tabs, progress bars, etc.
 
@@ -170,23 +170,28 @@ backend/
 
 ### Frontend Setup
 
-1. **Install dependencies** (from project root):
+1. **Navigate to frontend folder**:
+   ```powershell
+   cd frontend
+   ```
+
+2. **Install dependencies**:
    ```powershell
    npm install
    ```
 
-2. **Verify `.env` file** (already configured):
+3. **Verify `.env` file** (in frontend/ folder):
    ```env
    VITE_SUPABASE_URL=https://swjihpzlmwowqxfesiwc.supabase.co
    VITE_SUPABASE_PUBLISHABLE_KEY=your-key
    VITE_API_BASE_URL=http://localhost:8000
    ```
 
-3. **Run dev server**:
+4. **Run dev server**:
    ```powershell
    npm run dev
    ```
-   Frontend: http://localhost:5173
+   Frontend: http://localhost:8080
 
 ---
 
@@ -266,9 +271,9 @@ backend/
 - `backend/database_schema.sql` - Database structure
 
 ### Frontend
-- `src/lib/api-client.ts` - Backend communication
-- `src/pages/Upload.tsx` - Enhanced upload UI
-- `src/integrations/supabase/client.ts` - Supabase client
+- `frontend/src/lib/api-client.ts` - Backend communication
+- `frontend/src/pages/Upload.tsx` - Enhanced upload UI
+- `frontend/src/integrations/supabase/client.ts` - Supabase client
 
 ---
 

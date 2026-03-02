@@ -91,68 +91,75 @@ async def evaluate_model(
             # Load dataset for meta evaluator statistics
             df = pd.read_csv(dataset_path)
             
-            # Calculate dataset statistics for meta evaluator
+            # Prepare data splits
+            feature_names = [col for col in df.columns if col != df.columns[-1]]
+            target_col = df.columns[-1]
+            X = df[feature_names].values
+            y = df[target_col].values
+            split_idx = int(len(X) * 0.8)
+            X_train, X_test = X[:split_idx], X[split_idx:]
+            y_train, y_test = y[:split_idx], y[split_idx:]
+            
+            # Load model once for all analyses - try joblib first, then pickle
+            model_obj = None
+            try:
+                import joblib
+                model_obj = joblib.load(model_path)
+                logger.info(f"Model loaded successfully with joblib")
+            except Exception as e:
+                logger.debug(f"joblib load failed: {e}, trying pickle")
+                try:
+                    import pickle
+                    with open(model_path, 'rb') as f:
+                        model_obj = pickle.load(f)
+                    logger.info(f"Model loaded successfully with pickle")
+                except Exception as pickle_err:
+                    logger.error(f"Both joblib and pickle failed to load model: {pickle_err}")
+                    raise ValueError(
+                        f"Cannot load model file. This may be due to Python version mismatch or "
+                        f"incompatible scikit-learn version. Please re-upload the model trained with "
+                        f"the current environment (Python 3.10, scikit-learn 1.6.x). Error: {pickle_err}"
+                    )
+            
+            # Get predictions for fairness and robustness analysis
+            y_pred = np.asarray(model_obj.predict(X_test))
+            
+            # Calculate dataset statistics for meta evaluator (enhanced for DII)
             dataset_stats = {
                 'n_rows': len(df),
-                'n_features': len(df.columns) - 1,  # Exclude target
+                'n_features': len(feature_names),
                 'missing_values': df.isnull().sum().sum(),
-                'low_variance_fraction': 0.0,  # TODO: Calculate properly
-                'imbalance_ratio': 0.5  # TODO: Calculate for classification
+                'low_variance_fraction': 0.0,
+                'imbalance_ratio': 0.5,
+                'duplicate_ratio': df.duplicated().sum() / max(len(df), 1),
+                'skew_score': 0.0
             }
+            
+            # Calculate low variance fraction
+            numeric_cols = df[feature_names].select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                variances = df[numeric_cols].var()
+                low_var_count = (variances < 0.01).sum()
+                dataset_stats['low_variance_fraction'] = low_var_count / len(numeric_cols)
+                
+                # Calculate average absolute skewness
+                skews = df[numeric_cols].skew().abs()
+                dataset_stats['skew_score'] = min(1.0, skews.mean() / 3.0)  # Normalize to [0,1]
             
             # If classification, calculate class imbalance
             if model_type == ModelType.CLASSIFICATION:
-                # Assume last column is target
-                target_col = df.columns[-1]
                 value_counts = df[target_col].value_counts()
                 if len(value_counts) > 0:
                     dataset_stats['imbalance_ratio'] = value_counts.max() / len(df)
             
-            # Run Meta Evaluator
-            meta_result = meta_evaluator.evaluate(
-                metrics=metrics.model_dump(exclude_none=True),
-                dataset_stats=dataset_stats,
-                model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
-                train_metrics=None  # TODO: Pass train metrics if available
-            )
-            logger.info(f"Meta Evaluator result: meta_score={meta_result['meta_score']}, dataset_health={meta_result['dataset_health_score']}")
-            
-            # Prepare data for explainability and fairness analyses
-            feature_names = [col for col in df.columns if col != df.columns[-1]]
-            X = df[feature_names].values
-            split_idx = int(len(X) * 0.8)
-            X_train = X[:split_idx]
-            X_test = X[split_idx:]
-            
-            # Run Explainability Analysis
-            explainability_result = None
-            try:
-                # Load the model object for explainability
-                import pickle
-                with open(model_path, 'rb') as f:
-                    model_obj = pickle.load(f)
-                
-                explainability_result = explainability_engine.explain_model(
-                    model=model_obj,
-                    X_train=X_train,
-                    X_test=X_test,
-                    feature_names=feature_names,
-                    model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
-                    max_samples=100
-                )
-                logger.info(f"Explainability analysis completed: method={explainability_result.get('method_used')}")
-            except Exception as e:
-                logger.warning(f"Explainability analysis failed: {e}")
-                explainability_result = {"error": str(e), "method_used": None}
-            
-            # Run Fairness Analysis (if sensitive attribute is available)
+            # Run Fairness Analysis FIRST (needed for meta evaluator trust score)
             fairness_result = None
             try:
                 # Production-ready sensitive attribute detection priority:
                 # 1) Use `request.sensitive_attribute` if provided and present in dataset
-                # 2) Use dataset metadata field 'sensitive_attribute' or metadata->sensitive_attribute (if stored)
-                # 3) Use configured SENSITIVE_ATTRIBUTES list from settings (case-insensitive exact match)
-                # 4) Conservative fallback: do not auto-pick ambiguous categorical columns; log candidates and skip fairness
+                # 2) Use dataset metadata field 'sensitive_attribute' or metadata->sensitive_attribute
+                # 3) Use configured SENSITIVE_ATTRIBUTES list from settings
+                # 4) Conservative fallback: skip fairness analysis
                 sensitive_attr_col = None
 
                 # 1) explicit from request
@@ -163,15 +170,12 @@ async def evaluate_model(
                     else:
                         logger.warning(f"Requested sensitive attribute '{candidate}' not found in dataset columns")
 
-                # 2) dataset metadata (supports `sensitive_attribute` field or JSON metadata)
+                # 2) dataset metadata
                 if not sensitive_attr_col:
-                    # dataset may include direct column or a metadata json with sensitive_attribute key
                     ds_meta = dataset.copy() if isinstance(dataset, dict) else {}
-                    # check top-level key
                     if ds_meta.get('sensitive_attribute') and ds_meta.get('sensitive_attribute') in df.columns:
                         sensitive_attr_col = ds_meta.get('sensitive_attribute')
                     else:
-                        # check metadata json field if present
                         metadata = ds_meta.get('metadata') if isinstance(ds_meta.get('metadata'), dict) else {}
                         if metadata and metadata.get('sensitive_attribute') and metadata.get('sensitive_attribute') in df.columns:
                             sensitive_attr_col = metadata.get('sensitive_attribute')
@@ -184,11 +188,9 @@ async def evaluate_model(
                         if str(col).strip().lower() in configured:
                             candidates.append(col)
 
-                    # If exactly one candidate matches the configured list, pick it. If multiple, choose the one with most non-null values.
                     if len(candidates) == 1:
                         sensitive_attr_col = candidates[0]
                     elif len(candidates) > 1:
-                        # pick candidate with most non-null entries as heuristic
                         best = None
                         best_non_null = -1
                         for c in candidates:
@@ -198,28 +200,15 @@ async def evaluate_model(
                                 best = c
                         sensitive_attr_col = best
 
-                # 4) Conservative fallback: do not auto-select ambiguous categorical columns in production
+                # 4) Conservative fallback
                 if not sensitive_attr_col:
-                    logger.info("No clear sensitive attribute detected via request, dataset metadata, or configured attributes. Skipping fairness analysis.")
+                    logger.info("No clear sensitive attribute detected. Skipping fairness analysis.")
 
                 if sensitive_attr_col:
-                    # Get predictions (need to reload or get from evaluation)
-                    target_col = df.columns[-1]
-                    y_true = np.asarray(df[target_col].values[split_idx:])
-                    
-                    # Get predictions from model
-                    import pickle
-                    with open(model_path, 'rb') as f:
-                        model_obj = pickle.load(f)
-                    
-                    y_pred = np.asarray(model_obj.predict(X_test))
-                    
-                    # Get sensitive attribute for test set
                     sensitive_attr_test = np.asarray(df[sensitive_attr_col].values[split_idx:])
                     
-                    # Run fairness analysis
                     fairness_result = fairness_engine.analyze_fairness(
-                        y_true=y_true,
+                        y_true=np.asarray(y_test),
                         y_pred=y_pred,
                         sensitive_attr=sensitive_attr_test,
                         model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression"
@@ -227,19 +216,42 @@ async def evaluate_model(
                     
                     if fairness_result.get('analysis_successful'):
                         fairness_result['sensitive_attribute'] = sensitive_attr_col
-                        logger.info(f"Fairness analysis completed: overall_score={fairness_result['fairness_metrics'].get('overall_fairness_score')}")
+                        logger.info(f"Fairness analysis completed: overall_score={fairness_result['fairness_metrics'].get('overall_fairness_score')}, F_score={fairness_result['fairness_metrics'].get('fairness_score_F')}")
                     else:
                         logger.warning("Fairness analysis completed but no results")
                         fairness_result = None
-                else:
-                    # sensitive_attr_col was not set; fairness_result already None
-                    fairness_result = None
                     
             except Exception as e:
                 logger.warning(f"Fairness analysis failed: {e}")
                 fairness_result = None
+            
+            # Run Hybrid Trust Meta Evaluator (with fairness results)
+            meta_result = meta_evaluator.evaluate(
+                metrics=metrics.model_dump(exclude_none=True),
+                dataset_stats=dataset_stats,
+                model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
+                train_metrics=None,  # TODO: Pass train metrics if available
+                fairness_result=fairness_result
+            )
+            logger.info(f"Hybrid Trust Evaluator: trust_score={meta_result['trust_score']:.2f}, DII={meta_result['DII']:.4f}, P={meta_result['component_scores']['performance']:.4f}, H={meta_result['component_scores']['health']:.4f}, F={meta_result['component_scores']['fairness']:.4f}, R={meta_result['component_scores']['robustness']:.4f}")
+            
+            # Run Explainability Analysis
+            explainability_result = None
+            try:
+                explainability_result = explainability_engine.explain_model(
+                    model=model_obj,
+                    X_train=X_train,
+                    X_test=X_test,
+                    feature_names=feature_names,
+                    model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
+                    max_samples=100
+                )
+                logger.info(f"Explainability analysis completed: method={explainability_result.get('method_used')}")
+            except Exception as e:
+                logger.warning(f"Explainability analysis failed: {e}")
+                explainability_result = {"error": str(e), "method_used": None}
         
-        # Save evaluation results with meta evaluator, explainability, and fairness data
+        # Save evaluation results with hybrid trust framework data
         eval_data = {
             "model_id": request.id,
             "dataset_id": request.dataset_id,
@@ -248,14 +260,22 @@ async def evaluate_model(
             "eval_score": eval_score.eval_score,
             "normalized_metrics": eval_score.normalized_metrics,
             "weight_distribution": eval_score.weight_distribution,
-            "meta_score": meta_result["meta_score"],
+            # Hybrid Trust Framework scores
+            "meta_score": meta_result["meta_score"],  # Legacy compatibility
+            "trust_score": meta_result["trust_score"],
+            "DII": meta_result["DII"],
+            "component_scores": meta_result["component_scores"],
+            "risk_values": meta_result["risk_values"],
+            "hybrid_weights": meta_result["hybrid_weights"],
             "dataset_health_score": meta_result["dataset_health_score"],
             "meta_flags": meta_result["flags"],
             "meta_recommendations": meta_result["recommendations"],
             "meta_verdict": meta_result["verdict"],
+            # Explainability
             "feature_importance": explainability_result.get("feature_importance") if explainability_result else None,
             "explainability_method": explainability_result.get("method_used") if explainability_result else None,
             "shap_summary": explainability_result.get("shap_summary") if explainability_result else None,
+            # Fairness
             "fairness_metrics": fairness_result.get("fairness_metrics") if fairness_result else None,
             "group_metrics": fairness_result.get("group_metrics") if fairness_result else None,
             "sensitive_attribute": fairness_result.get("sensitive_attribute") if fairness_result else None
@@ -296,14 +316,22 @@ async def evaluate_model(
             metrics=metrics,
             eval_score=eval_score,
             evaluated_at=evaluation["evaluated_at"],
+            # Hybrid Trust Framework scores
             meta_score=evaluation.get("meta_score"),
+            trust_score=evaluation.get("trust_score"),
+            DII=evaluation.get("DII"),
+            component_scores=evaluation.get("component_scores"),
+            risk_values=evaluation.get("risk_values"),
+            hybrid_weights=evaluation.get("hybrid_weights"),
             dataset_health_score=evaluation.get("dataset_health_score"),
             meta_flags=evaluation.get("meta_flags"),
             meta_recommendations=evaluation.get("meta_recommendations"),
             meta_verdict=evaluation.get("meta_verdict"),
+            # Explainability
             feature_importance=evaluation.get("feature_importance"),
             explainability_method=evaluation.get("explainability_method"),
             shap_summary=evaluation.get("shap_summary"),
+            # Fairness
             fairness_metrics=evaluation.get("fairness_metrics"),
             group_metrics=evaluation.get("group_metrics"),
             sensitive_attribute=evaluation.get("sensitive_attribute")

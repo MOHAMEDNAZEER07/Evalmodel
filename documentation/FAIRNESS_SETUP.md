@@ -18,14 +18,14 @@
    - Added fairness_metrics, group_metrics, sensitive_attribute fields
 
 ### Frontend
-1. ✅ **Fairness Page** (`src/pages/Fairness.tsx`)
+1. ✅ **Fairness Page** (`frontend/src/pages/Fairness.tsx`)
    - Overall fairness score with color-coded levels
    - Three tabs: Metrics | Group Comparison | Recommendations
    - Multiple chart types (Bar, Line, Radar)
    - Detailed metrics table
    - Actionable recommendations
 
-2. ✅ **Routing** (`src/App.tsx`)
+2. ✅ **Routing** (`frontend/src/App.tsx`)
    - Added /fairness route
    - Integrated with protected routes
 

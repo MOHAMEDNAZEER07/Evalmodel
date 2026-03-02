@@ -137,14 +137,22 @@ class EvaluationResult(BaseModel):
     metrics: MetricsResult
     eval_score: EvalScoreResult
     evaluated_at: datetime
-    meta_score: Optional[float] = None
+    # Hybrid Trust Framework scores
+    meta_score: Optional[float] = None  # Legacy compatibility
+    trust_score: Optional[float] = Field(None, description="Hybrid Trust Score T = 100 * Σ(β_i * component_i)")
+    DII: Optional[float] = Field(None, description="Dataset Instability Index (0-1)")
+    component_scores: Optional[Dict[str, float]] = Field(None, description="P, H, F, R component scores")
+    risk_values: Optional[Dict[str, Any]] = Field(None, description="DP and delta risk values")
+    hybrid_weights: Optional[Dict[str, float]] = Field(None, description="Final β weights after DII adjustment")
     dataset_health_score: Optional[float] = None
     meta_flags: Optional[List[str]] = None
     meta_recommendations: Optional[List[Dict[str, Any]]] = None
     meta_verdict: Optional[Dict[str, Any]] = None
+    # Explainability
     feature_importance: Optional[List[Dict[str, Any]]] = None
     explainability_method: Optional[str] = None
     shap_summary: Optional[Dict[str, Any]] = None
+    # Fairness
     fairness_metrics: Optional[Dict[str, Any]] = None
     group_metrics: Optional[List[Dict[str, Any]]] = None
     sensitive_attribute: Optional[str] = None

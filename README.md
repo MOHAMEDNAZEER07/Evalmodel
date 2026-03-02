@@ -76,6 +76,9 @@ Perfect for:
 ### 1. Frontend Setup
 
 ```bash
+# Navigate to frontend
+cd frontend
+
 # Install dependencies
 npm install
 
@@ -88,7 +91,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs at: http://localhost:5173
+Frontend runs at: http://localhost:8080
 
 ### 2. Backend Setup
 
@@ -122,7 +125,7 @@ API Docs: http://localhost:8000/api/docs
 ## 📖 Documentation
 
 - **[Backend API Documentation](backend/README.md)** - Complete FastAPI setup guide
-- **[Project Status](PROJECT_STATUS.md)** - Current implementation status
+- **[Project Status](documentation/PROJECT_STATUS.md)** - Current implementation status
 - **[Database Schema](backend/database_schema.sql)** - PostgreSQL schema
 
 ---
@@ -270,8 +273,9 @@ evalmodel/
 ### Running Tests
 
 ```bash
-# Frontend tests
-npm run test
+# Frontend E2E tests
+cd frontend
+npm run test:e2e
 
 # Backend tests
 cd backend
@@ -282,9 +286,11 @@ pytest
 
 ```bash
 # Frontend
+cd frontend
 npm run build
 
 # Backend
+cd backend
 pip install gunicorn
 gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker
 ```

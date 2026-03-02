@@ -1,6 +1,38 @@
 """
 SMCP - Standardized Model Comparison Pipeline
-Core evaluation engine for universal ML model evaluation
+==============================================
+Core evaluation engine for universal ML model evaluation.
+
+This module provides framework-agnostic model evaluation capabilities,
+computing standardized metrics that feed into the Hybrid Trust Framework.
+
+Supported Frameworks:
+---------------------
+- scikit-learn (.pkl, .joblib)
+- PyTorch (.pt, .pth)  
+- Keras/TensorFlow (.h5)
+- ONNX (.onnx) - Recommended for production
+
+EvalScore Calculation:
+----------------------
+EvalScore = 100 × Σ(weight_i × normalized_metric_i)
+
+Classification weights: accuracy=0.25, precision=0.25, recall=0.25, f1=0.25
+Regression weights: R²=0.40, MAE=0.30, RMSE=0.30
+
+Normalization:
+- Benefit metrics (accuracy, R²): clip to [0, 1]
+- Cost metrics (MSE, MAE): transform via 1/(1+value)
+
+Mathematical Guarantees:
+------------------------
+- EvalScore ∈ [0, 100]
+- All normalized metrics ∈ [0, 1]
+- Weights sum to 1.0
+
+References:
+-----------
+- See documentation/FORMULAS_AND_METHODOLOGIES.md for complete specification
 """
 import numpy as np
 import pandas as pd
@@ -18,6 +50,9 @@ from app.models.schemas import ModelType, ModelFramework, MetricsResult, EvalSco
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Numerical stability constant
+EPSILON = 1e-12
 
 if TYPE_CHECKING:
 	# Helpful for type checkers / IDEs when onnxruntime is installed locally.
@@ -446,8 +481,25 @@ class SMCPEngine:
         model_type: ModelType
     ) -> EvalScoreResult:
         """
-        Calculate unified EvalScore (0-100) from metrics
-        Normalizes and weights metrics based on model type
+        Calculate unified EvalScore (0-100) from metrics.
+        
+        Formula:
+            EvalScore = 100 × Σ(weight_i × normalized_metric_i)
+        
+        Normalization:
+            - Benefit metrics (higher is better): clip to [0, 1]
+            - Cost metrics (lower is better): transform via 1/(1+value)
+        
+        Args:
+            metrics: MetricsResult containing raw metric values
+            model_type: Type of model for weight selection
+            
+        Returns:
+            EvalScoreResult with eval_score in [0, 100]
+            
+        Mathematical Guarantees:
+            - EvalScore ∈ [0, 100]
+            - All normalized metrics ∈ [0, 1]
         """
         weights = self.METRIC_WEIGHTS.get(model_type, {})
         normalized_metrics = {}
@@ -471,11 +523,19 @@ class SMCPEngine:
                     # Higher is better - already 0-1 range typically
                     normalized = min(max(value, 0), 1)
                 
+                # Assert normalized value is in valid range
+                assert 0.0 <= normalized <= 1.0, \
+                    f"Normalized metric {metric_name} out of range [0,1]: {normalized}"
+                
                 normalized_metrics[metric_name] = float(normalized)
                 total_score += normalized * weight
         
-        # Scale to 0-100
-        eval_score = total_score * 100
+        # Scale to 0-100 and clip for safety
+        eval_score = min(100.0, max(0.0, total_score * 100))
+        
+        # Assert eval_score is in valid range
+        assert 0.0 <= eval_score <= 100.0, \
+            f"EvalScore out of range [0,100]: {eval_score}"
         
         return EvalScoreResult(
             eval_score=float(round(eval_score, 2)),

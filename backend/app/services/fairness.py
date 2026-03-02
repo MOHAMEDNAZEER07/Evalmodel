@@ -1,6 +1,33 @@
 """
 Fairness Analysis Service
-Provides bias detection and fairness metrics for ML models
+=========================
+Provides bias detection and fairness metrics for ML models.
+
+Hybrid Trust Framework Integration:
+-----------------------------------
+This module computes the Fairness score (F) for the trust framework:
+    F = 1 - DP
+
+where DP (Demographic Parity difference) is:
+    DP = |PPR_group0 - PPR_group1|
+
+Mathematical Guarantees:
+------------------------
+- DP ∈ [0, 1] (clipped)
+- F ∈ [0, 1] (clipped)
+- All group metrics are properly bounded
+
+Supported Fairness Metrics:
+---------------------------
+- Demographic Parity (Statistical Parity)
+- Equal Opportunity  
+- Disparate Impact Ratio
+- Equalized Odds
+- Predictive Parity
+
+References:
+-----------
+- See documentation/FORMULAS_AND_METHODOLOGIES.md for complete specification
 """
 
 import numpy as np
@@ -10,6 +37,9 @@ from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, r
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Numerical stability constant
+EPSILON = 1e-12
 
 
 class FairnessEngine:
@@ -166,10 +196,15 @@ class FairnessEngine:
         y_true_1, y_pred_1 = y_true[mask_1], y_pred[mask_1]
         
         # Demographic Parity (Statistical Parity)
+        # DP = |PPR_group0 - PPR_group1|, clipped to [0, 1]
         ppr_0 = np.mean(y_pred_0) if len(y_pred_0) > 0 else 0
         ppr_1 = np.mean(y_pred_1) if len(y_pred_1) > 0 else 0
-        demographic_parity_diff = abs(ppr_0 - ppr_1)
+        demographic_parity_diff = min(1.0, max(0.0, abs(ppr_0 - ppr_1)))  # Clip to [0,1]
         statistical_parity = 1 - demographic_parity_diff  # Convert to score (higher is better)
+        
+        # Validate DP is in range (assertion for mathematical integrity)
+        assert 0.0 <= demographic_parity_diff <= 1.0, \
+            f"Demographic parity difference out of range [0,1]: {demographic_parity_diff}"
         
         # Disparate Impact Ratio
         disparate_impact = (ppr_1 / ppr_0) if ppr_0 > 0 else 1.0
@@ -196,8 +231,17 @@ class FairnessEngine:
         precision_1 = precision_score(y_true_1, y_pred_1, zero_division=0)
         predictive_parity = 1 - abs(precision_0 - precision_1)
         
+        # F score for Hybrid Trust Framework: F = 1 - DP
+        # Both DP and F are clipped to [0, 1] for mathematical integrity
+        fairness_score_F = min(1.0, max(0.0, 1.0 - demographic_parity_diff))
+        
+        # Validate F is in range (assertion for mathematical integrity)
+        assert 0.0 <= fairness_score_F <= 1.0, \
+            f"Fairness score F out of range [0,1]: {fairness_score_F}"
+        
         return {
             'demographic_parity_difference': float(demographic_parity_diff),
+            'fairness_score_F': float(fairness_score_F),  # Trust framework F score
             'equal_opportunity_difference': float(equal_opportunity_diff),
             'disparate_impact_ratio': float(disparate_impact),
             'statistical_parity': float(statistical_parity),

@@ -193,10 +193,10 @@ API documentation: `http://localhost:8000/docs`
 
 ## Step 4: Frontend Setup (React + Vite)
 
-### 4.1 Navigate to Project Root
+### 4.1 Navigate to Frontend Folder
 
 ```bash
-cd ..
+cd frontend
 ```
 
 ### 4.2 Install Dependencies
@@ -213,7 +213,7 @@ bun install
 
 ### 4.3 Create `.env` File
 
-Create a file named `.env` in the **root** directory (not in `src`):
+Create a file named `.env` in the **frontend** directory:
 
 ```env
 VITE_API_BASE_URL=http://localhost:8000
@@ -231,7 +231,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY_HERE
 npm run dev
 ```
 
-The frontend will be available at: `http://localhost:8080` (or the port shown in terminal)
+The frontend will be available at: `http://localhost:8080`
 
 ---
 

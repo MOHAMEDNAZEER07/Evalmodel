@@ -101,7 +101,10 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
 **Open a NEW terminal** (keep backend running!)
 
 ```powershell
-# From project root
+# Navigate to frontend folder
+cd frontend
+
+# Install dependencies
 npm install
 
 # Verify .env file exists
@@ -115,7 +118,7 @@ npm run dev
 ```
 VITE v5.x ready in xxx ms
 
-➜  Local:   http://localhost:5173/
+➜  Local:   http://localhost:8080/
 ```
 
 **Open**: http://localhost:5173

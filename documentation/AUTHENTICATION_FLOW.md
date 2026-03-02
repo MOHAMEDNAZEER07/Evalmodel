@@ -52,11 +52,11 @@ Frontend (React)  →  Backend (FastAPI)  →  Supabase Auth
 ## Key Files
 
 ### Frontend
-- `src/contexts/AuthContext.tsx` - Main auth state management
-- `src/lib/api-client.ts` - API methods (signup, login, logout)
-- `src/components/ProtectedRoute.tsx` - Route protection
-- `src/pages/Login.tsx` - Login page
-- `src/pages/Signup.tsx` - Signup page
+- `frontend/src/contexts/AuthContext.tsx` - Main auth state management
+- `frontend/src/lib/api-client.ts` - API methods (signup, login, logout)
+- `frontend/src/components/ProtectedRoute.tsx` - Route protection
+- `frontend/src/pages/Login.tsx` - Login page
+- `frontend/src/pages/Signup.tsx` - Signup page
 
 ### Backend
 - `backend/app/routes/auth.py` - Auth endpoints
