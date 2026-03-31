@@ -18,7 +18,7 @@ export const useInsightsData = (datasetId: string | null) => {
 
   const fetchDataQuality = useCallback(async (id: string) => {
     try {
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
       }
@@ -42,7 +42,7 @@ export const useInsightsData = (datasetId: string | null) => {
 
   const fetchOutliers = useCallback(async (id: string, method: 'iqr' | 'zscore' = 'iqr') => {
     try {
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
       }
@@ -72,7 +72,7 @@ export const useInsightsData = (datasetId: string | null) => {
     threshold: number = 0.5
   ) => {
     try {
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
       }
@@ -102,7 +102,7 @@ export const useInsightsData = (datasetId: string | null) => {
     try {
       setState(prev => ({ ...prev, isLoading: true, error: null }));
 
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
       }

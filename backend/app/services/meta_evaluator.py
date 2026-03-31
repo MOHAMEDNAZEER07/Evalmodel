@@ -82,6 +82,12 @@ DEFAULT_LAMBDA_CAP = 0.85  # Maximum lambda value to preserve user influence
 # Legacy constant for backward compatibility
 NON_COMPENSATORY_THRESHOLD = GUARD_THRESHOLD_BALANCED
 
+# Minimum weight floor for auto weights
+# Prevents "perfect" components from being completely invisible in trust score
+# Research justification: Even components with zero risk should have minimal influence
+# to ensure they're still considered in final trust computation
+MIN_WEIGHT_FLOOR = 0.05  # Every component gets at least 5% weight
+
 # Stochastic estimation defaults
 DEFAULT_STOCHASTIC_SIGMA = 0.02  # Conservative perturbation standard deviation
 
@@ -197,7 +203,11 @@ class MetaEvaluator:
             health_score = 1.0 - dii_score
             
             # F - Fairness Score and DP (Demographic Parity difference)
-            fair_score, dp_value = self._calculate_fairness_score(fairness_result)
+            fair_score, dp_value, fairness_evaluated = self._calculate_fairness_score(fairness_result)
+            
+            # Track whether fairness was actually tested vs defaulted
+            # fairness_evaluated=True means real fairness data exists
+            # fairness_evaluated=False means F=0.5 is a neutral placeholder (untested)
             
             # R - Robustness Score and delta
             robust_score, delta_value = self._calculate_robustness_score(metrics, train_metrics, model_type)
@@ -217,12 +227,21 @@ class MetaEvaluator:
             # Risk is inverted score: higher risk = lower score
             # All risk values are clipped to [0, 1] for stability
             # In strict mode, apply nonlinear amplification
+            # 
+            # IMPORTANT: When fairness is not evaluated, F is EXCLUDED
+            # from weight computation entirely (not given neutral risk).
+            # This prevents unverified fairness from dominating weights.
             # ============================================
             
             r_P = self._clip(1.0 - perf_score)    # Performance risk
             r_H = self._clip(dii_score)           # Dataset health risk (DII itself is instability)
-            r_F = self._clip(dp_value)            # Fairness risk (DP = demographic parity difference)
             r_R = self._clip(delta_value)         # Generalization stability risk (train-test gap)
+            
+            # F risk only computed if fairness was actually evaluated
+            if fairness_evaluated:
+                r_F = self._clip(dp_value)
+            else:
+                r_F = None  # Excluded from computation
             
             # Strict mode: Apply symmetric risk amplification
             amplification_applied = False
@@ -230,31 +249,53 @@ class MetaEvaluator:
                 amplification_applied = True
                 r_P = self._clip(r_P ** STRICT_AMPLIFICATION_POWER)
                 r_H = self._clip(r_H ** STRICT_AMPLIFICATION_POWER)
-                r_F = self._clip(r_F ** STRICT_AMPLIFICATION_POWER)
+                if r_F is not None:
+                    r_F = self._clip(r_F ** STRICT_AMPLIFICATION_POWER)
                 r_R = self._clip(r_R ** STRICT_AMPLIFICATION_POWER)
                 self.logger.info(f"⚡ STRICT MODE: Risk amplification applied (power={STRICT_AMPLIFICATION_POWER})")
             
-            risk_sum = r_P + r_H + r_F + r_R
+            # Risk sum only includes evaluated components
+            if fairness_evaluated:
+                risk_sum = r_P + r_H + r_F + r_R
+                active_components = {'performance', 'health', 'fairness', 'robustness'}
+            else:
+                risk_sum = r_P + r_H + r_R
+                active_components = {'performance', 'health', 'robustness'}
             
-            self.logger.info(f"⚠️  Risk Values: r_P={r_P:.4f}, r_H={r_H:.4f}, r_F={r_F:.4f}, r_R={r_R:.4f}")
-            self.logger.info(f"⚠️  Total Risk Sum: {risk_sum:.4f}")
+            self.logger.info(f"⚠️  Risk Values: r_P={r_P:.4f}, r_H={r_H:.4f}, r_F={r_F if r_F else 'N/A'}, r_R={r_R:.4f}")
+            self.logger.info(f"⚠️  Active Components: {active_components} | Total Risk Sum: {risk_sum:.4f}")
             
             # ============================================
             # STEP 3: Calculate Automatic Weights (risk-proportional)
-            # Safe handling for zero/near-zero risk sum
+            # Only active components participate in weight computation
             # ============================================
             
             if risk_sum > EPSILON:
-                beta_auto = {
-                    'performance': r_P / risk_sum,
-                    'health': r_H / risk_sum,
-                    'fairness': r_F / risk_sum,
-                    'robustness': r_R / risk_sum
-                }
+                if fairness_evaluated:
+                    beta_auto = {
+                        'performance': r_P / risk_sum,
+                        'health': r_H / risk_sum,
+                        'fairness': r_F / risk_sum,
+                        'robustness': r_R / risk_sum
+                    }
+                else:
+                    # F excluded - only P, H, R
+                    beta_auto = {
+                        'performance': r_P / risk_sum,
+                        'health': r_H / risk_sum,
+                        'fairness': 0.0,  # Excluded
+                        'robustness': r_R / risk_sum
+                    }
             else:
-                # Risk sum is effectively zero - use equal weights
+                # Risk sum is effectively zero - use equal weights over active components
                 self.logger.warning(f"⚠️  Risk sum ({risk_sum}) <= EPSILON ({EPSILON}), using equal weights")
-                beta_auto = self.EQUAL_WEIGHTS.copy()
+                if fairness_evaluated:
+                    beta_auto = self.EQUAL_WEIGHTS.copy()
+                else:
+                    beta_auto = {'performance': 1/3, 'health': 1/3, 'fairness': 0.0, 'robustness': 1/3}
+            
+            # Apply minimum weight floor only to active components
+            beta_auto = self._apply_min_floor_active(beta_auto, MIN_WEIGHT_FLOOR, active_components)
             
             self.logger.info(f"🤖 Auto Weights: {beta_auto}")
             
@@ -264,10 +305,20 @@ class MetaEvaluator:
             # Balanced: lambda = DII
             # Strict: lambda = DII^1.5 (faster escalation)
             # Then: lambda = min(lambda, lambda_cap)
+            # 
+            # When fairness is excluded, redistribute its user weight among P, H, R
             # ============================================
             
             # Use user weights or defaults
-            user_w = user_weights if user_weights else self.DEFAULT_USER_WEIGHTS
+            user_w = user_weights.copy() if user_weights else self.DEFAULT_USER_WEIGHTS.copy()
+            
+            # Redistribute fairness user weight among P, H, R when fairness is excluded
+            if not fairness_evaluated:
+                f_weight = user_w.get('fairness', 0.20)
+                user_w['fairness'] = 0.0
+                boost = f_weight / 3.0
+                for k in ['performance', 'health', 'robustness']:
+                    user_w[k] = user_w.get(k, 0.25) + boost
             
             # Lambda controls automatic vs user preference
             raw_lambda = dii_score
@@ -285,18 +336,24 @@ class MetaEvaluator:
             if lambda_adjusted > self.lambda_cap:
                 self.logger.info(f"🔧 Lambda capped: {lambda_adjusted:.4f} -> {lambda_value:.4f} (cap={self.lambda_cap})")
             
-            # Compute hybrid weights (convex combination)
+            # Compute hybrid weights (convex combination) only over active components
             beta_final: Dict[str, float] = {}
             for key in ['performance', 'health', 'fairness', 'robustness']:
-                beta_final[key] = lambda_value * beta_auto[key] + (1.0 - lambda_value) * user_w.get(key, 0.25)
+                if key in active_components:
+                    beta_final[key] = lambda_value * beta_auto[key] + (1.0 - lambda_value) * user_w.get(key, 0.25)
+                else:
+                    beta_final[key] = 0.0  # Excluded component
             
-            # Explicit renormalization to ensure weights sum to 1
-            weight_sum = sum(beta_final.values())
+            # Explicit renormalization to ensure weights sum to 1 (only active components)
+            weight_sum = sum(beta_final[k] for k in active_components)
             
             if weight_sum <= EPSILON:
                 # Fallback to equal weights if weight_sum is effectively zero
                 self.logger.warning(f"⚠️  Weight sum ({weight_sum}) <= EPSILON, using equal weights")
-                beta_final = self.EQUAL_WEIGHTS.copy()
+                if fairness_evaluated:
+                    beta_final = self.EQUAL_WEIGHTS.copy()
+                else:
+                    beta_final = {'performance': 1/3, 'health': 1/3, 'fairness': 0.0, 'robustness': 1/3}
             else:
                 # Renormalize weights
                 beta_final = {k: v / weight_sum for k, v in beta_final.items()}
@@ -309,17 +366,20 @@ class MetaEvaluator:
             
             self.logger.info(f"🔧 Lambda (DII={raw_lambda:.4f}, capped={lambda_value:.4f})")
             self.logger.info(f"📐 Final Hybrid Weights: {beta_final} (sum={final_sum:.6f})")
+            self.logger.info(f"📐 Active components: {active_components}")
             
             # ============================================
             # STEP 5: Calculate Trust Score T
-            # T = 100 * (beta_P * P + beta_H * H + beta_F * F + beta_R * R)
+            # T = 100 * Σ(beta_i * C_i) for active components only
+            # When fairness is excluded, T is computed over P, H, R only
             # Strict mode: Apply global instability penalty T = T * (1 - penalty * DII)
             # ============================================
             
+            # Compute trust score only over active components
             trust_score_raw: float = 100.0 * (
                 beta_final['performance'] * perf_score +
                 beta_final['health'] * health_score +
-                beta_final['fairness'] * fair_score +
+                (beta_final['fairness'] * fair_score if fairness_evaluated else 0.0) +
                 beta_final['robustness'] * robust_score
             )
             
@@ -346,14 +406,16 @@ class MetaEvaluator:
             # STEP 6: Non-Compensatory Guard Check
             # If any component score falls below mode-specific threshold, override risk classification
             # Balanced: threshold = 0.30, Strict: threshold = 0.40
+            # Note: Fairness is only included in guard check if it was actually evaluated
             # ============================================
             
             component_scores_raw = {
                 'performance': perf_score,
                 'health': health_score,
-                'fairness': fair_score,
                 'robustness': robust_score
             }
+            if fairness_evaluated:
+                component_scores_raw['fairness'] = fair_score
             
             # Check for non-compensatory failures (any score below mode-specific threshold)
             non_compensatory_failures = [
@@ -370,9 +432,9 @@ class MetaEvaluator:
             # STEP 7: Generate Flags, Recommendations, Verdict
             # ============================================
             
-            flags = self._generate_flags(metrics, dataset_stats, train_metrics, model_type, dii_score, dp_value, delta_value)
-            recommendations = self._generate_recommendations(flags, metrics, dataset_stats, dii_score, dp_value, delta_value)
-            verdict = self._generate_verdict(trust_score, flags, non_compensatory_override, non_compensatory_failures)
+            flags = self._generate_flags(metrics, dataset_stats, train_metrics, model_type, dii_score, dp_value, delta_value, fairness_evaluated)
+            recommendations = self._generate_recommendations(flags, metrics, dataset_stats, dii_score, dp_value, delta_value, fairness_evaluated)
+            verdict = self._generate_verdict(trust_score, flags, non_compensatory_override, non_compensatory_failures, fairness_evaluated)
             
             # ============================================
             # STEP 8: Validate Mathematical Integrity
@@ -393,7 +455,7 @@ class MetaEvaluator:
                 "P": round(perf_score, 4), "H": round(health_score, 4),
                 "F": round(fair_score, 4), "R": round(robust_score, 4),
                 "DII": round(dii_score, 4),
-                "dii_formula": "multiplicative" if self.trust_mode == TRUST_MODE_STRICT else "additive",
+                "dii_formula": "multiplicative" if self.trust_mode == TRUST_MODE_STRICT else "additive_weighted",
                 "lambda": round(lambda_value, 4),
                 "lambda_raw": round(raw_lambda, 4),
                 "lambda_cap": self.lambda_cap,
@@ -431,24 +493,30 @@ class MetaEvaluator:
                 "component_scores": {
                     "performance": round(perf_score, 4),
                     "health": round(health_score, 4),
-                    "fairness": round(fair_score, 4),
+                    "fairness": round(fair_score, 4),  # 0.5 (neutral) if not evaluated
                     "robustness": round(robust_score, 4)
                 },
                 
+                # Fairness evaluation status
+                "fairness_evaluated": fairness_evaluated,  # True if real fairness data exists
+                "fairness_available": fairness_evaluated,  # Legacy alias
+                
                 # Risk metrics
                 "DII": round(dii_score, 4),
-                "dii_formula": "multiplicative" if self.trust_mode == TRUST_MODE_STRICT else "additive",
+                "dii_formula": "multiplicative" if self.trust_mode == TRUST_MODE_STRICT else "additive_weighted",
                 "dii_components": {k: round(v, 4) for k, v in dii_components.items() if isinstance(v, (int, float))},
                 "risk_values": {
                     "DP": round(dp_value, 4),
                     "delta": round(delta_value, 4),
                     "r_P": round(r_P, 4),
                     "r_H": round(r_H, 4),
-                    "r_F": round(r_F, 4),
+                    "r_F": round(r_F, 4) if r_F is not None else None,
+                    "r_F_display": "Excluded" if not fairness_evaluated else round(r_F, 4),
                     "r_R": round(r_R, 4),
                     "total": round(risk_sum, 4),
                     "amplification_applied": amplification_applied,
-                    "amplification_power": STRICT_AMPLIFICATION_POWER if amplification_applied else None
+                    "amplification_power": STRICT_AMPLIFICATION_POWER if amplification_applied else None,
+                    "fairness_excluded": not fairness_evaluated
                 },
                 
                 # Weight information
@@ -501,6 +569,65 @@ class MetaEvaluator:
     def _safe_divide(self, numerator: float, denominator: float, default: float = 0.0) -> float:
         """Safe division handling zero denominator"""
         return numerator / denominator if abs(denominator) > 1e-10 else default
+    
+    def _apply_min_floor(self, weights: Dict[str, float], floor: float = 0.05) -> Dict[str, float]:
+        """
+        Apply minimum floor to weights and renormalize.
+        
+        Prevents "perfect" components (zero risk) from having zero weight,
+        ensuring they still contribute to the trust score calculation.
+        
+        Args:
+            weights: Dictionary of component weights
+            floor: Minimum weight for each component (default 5%)
+        
+        Returns:
+            Weights with floor applied and normalized to sum to 1.0
+        """
+        # Apply floor
+        floored = {k: max(v, floor) for k, v in weights.items()}
+        
+        # Renormalize to sum to 1.0
+        total = sum(floored.values())
+        if total > EPSILON:
+            floored = {k: v / total for k, v in floored.items()}
+        
+        return floored
+    
+    def _apply_min_floor_active(
+        self,
+        weights: Dict[str, float],
+        floor: float,
+        active_components: set
+    ) -> Dict[str, float]:
+        """
+        Apply minimum floor only to active components and renormalize.
+        
+        Inactive components (e.g., excluded fairness) remain at 0.
+        
+        Args:
+            weights: Dictionary of component weights
+            floor: Minimum weight for active components (default 5%)
+            active_components: Set of component names to include
+        
+        Returns:
+            Weights with floor applied to active components, normalized to sum to 1.0
+        """
+        # Apply floor only to active components
+        floored = {}
+        for k, v in weights.items():
+            if k in active_components:
+                floored[k] = max(v, floor)
+            else:
+                floored[k] = 0.0  # Excluded component stays at 0
+        
+        # Renormalize only active components to sum to 1.0
+        active_total = sum(floored[k] for k in active_components)
+        if active_total > EPSILON:
+            for k in active_components:
+                floored[k] = floored[k] / active_total
+        
+        return floored
     
     def _calculate_performance_score(self, metrics: Dict[str, Any], model_type: str) -> float:
         """
@@ -592,38 +719,46 @@ class MetaEvaluator:
             dii_formula = "multiplicative"
             self.logger.info(f"⚡ STRICT MODE: Using multiplicative DII formula")
         else:
-            # Balanced mode: Simple average
-            dii = (imbalance_norm + missing_ratio + duplicate_ratio + skew_score) / 4.0
-            dii_formula = "additive"
+            # Balanced mode: Weighted average (M most impactful, S least)
+            dii = 0.35 * missing_ratio + 0.30 * imbalance_norm + 0.20 * duplicate_ratio + 0.15 * skew_score
+            dii_formula = "additive_weighted"
         
-        dii = self._clip(dii)
+        dii = round(float(self._clip(dii)), 4)
         
+        # Return keys matching frontend expectations (I, M, D, S)
         components = {
-            'imbalance_norm': imbalance_norm,
-            'missing_ratio': missing_ratio,
-            'duplicate_ratio': duplicate_ratio,
-            'skew_score': skew_score,
+            'imbalance': imbalance_norm,
+            'missing': missing_ratio,
+            'duplicates': duplicate_ratio,
+            'skew': skew_score,
             'formula': dii_formula
         }
         
-        self.logger.info(f"📉 DII Components: {components}")
+        self.logger.info(f"📉 DII Components: I={imbalance_norm:.3f}, M={missing_ratio:.3f}, D={duplicate_ratio:.3f}, S={skew_score:.3f}")
         
         return dii, components
     
-    def _calculate_fairness_score(self, fairness_result: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+    def _calculate_fairness_score(self, fairness_result: Optional[Dict[str, Any]]) -> Tuple[float, float, bool]:
         """
         Calculate Fairness Score F and Demographic Parity difference DP
         
         F = 1 - DP (higher F = more fair)
         DP = |prob_positive_group0 - prob_positive_group1|
         
+        When fairness is not evaluated (no sensitive attribute), returns neutral values:
+        - F = 0.5 (neither good nor bad)
+        - DP = 0.5 (neutral risk)
+        - fairness_evaluated = False
+        
         Returns:
-            Tuple of (F score [0,1], DP value [0,1])
+            Tuple of (F score [0,1], DP value [0,1], fairness_evaluated bool)
         """
         if not fairness_result or not fairness_result.get('analysis_successful'):
-            # No fairness data - assume neutral (F = 1, DP = 0)
-            self.logger.info("⚖️  No fairness data available, using neutral values (F=1.0, DP=0.0)")
-            return 1.0, 0.0
+            # No fairness data - return neutral values (0.5 = agnostic)
+            # This ensures fairness component has neutral weight contribution
+            # rather than being either "perfect" (1.0) or "risky" (0.0)
+            self.logger.info("⚖️  No fairness data available, using neutral values (F=0.5, fairness_evaluated=False)")
+            return 0.5, 0.5, False
         
         fairness_metrics = fairness_result.get('fairness_metrics', {})
         
@@ -635,9 +770,9 @@ class MetaEvaluator:
         f_score = 1.0 - dp
         f_score = self._clip(f_score)
         
-        self.logger.info(f"⚖️  Fairness: DP={dp:.4f}, F={f_score:.4f}")
+        self.logger.info(f"⚖️  Fairness evaluated: DP={dp:.4f}, F={f_score:.4f}")
         
-        return f_score, dp
+        return f_score, dp, True
     
     def _calculate_robustness_score(
         self,
@@ -708,12 +843,17 @@ class MetaEvaluator:
         model_type: str,
         dii: float,
         dp: float,
-        delta: float
+        delta: float,
+        fairness_evaluated: bool = True
     ) -> List[str]:
         """
         Generate warning flags based on component analysis
         """
         flags: List[str] = []
+        
+        # Fairness evaluation status - CRITICAL flag if not evaluated
+        if not fairness_evaluated:
+            flags.append("fairness_unverified")
         
         # DII-based flags (Dataset Instability)
         if dii > 0.7:
@@ -723,13 +863,14 @@ class MetaEvaluator:
         elif dii > 0.3:
             flags.append("moderate_dataset_instability")
         
-        # Fairness flags
-        if dp > 0.3:
-            flags.append("severe_fairness_violation")
-        elif dp > 0.2:
-            flags.append("significant_bias_detected")
-        elif dp > 0.1:
-            flags.append("mild_bias_detected")
+        # Fairness flags (only apply if fairness was evaluated)
+        if fairness_evaluated:
+            if dp > 0.3:
+                flags.append("severe_fairness_violation")
+            elif dp > 0.2:
+                flags.append("significant_bias_detected")
+            elif dp > 0.1:
+                flags.append("mild_bias_detected")
         
         # Robustness flags
         if delta > 0.3:
@@ -789,12 +930,23 @@ class MetaEvaluator:
         dataset_stats: Dict[str, Any],
         dii: float,
         dp: float,
-        delta: float
+        delta: float,
+        fairness_evaluated: bool = True
     ) -> List[Dict[str, str]]:
         """
         Generate actionable recommendations based on trust component analysis
         """
         recommendations: List[Dict[str, str]] = []
+        
+        # Fairness unverified - critical recommendation
+        if not fairness_evaluated:
+            recommendations.append({
+                "action": "Add sensitive attribute to dataset for fairness evaluation",
+                "why": "Fairness was not evaluated (F=0.5 is a neutral placeholder). "
+                       "Trust score may be inflated without verifying model does not discriminate.",
+                "priority": "high",
+                "component": "fairness"
+            })
         
         # DII-based recommendations
         if dii > 0.5:
@@ -805,21 +957,22 @@ class MetaEvaluator:
                 "component": "health"
             })
         
-        # Fairness recommendations
-        if dp > 0.2:
-            recommendations.append({
-                "action": "Apply fairness interventions (reweighting, adversarial debiasing)",
-                "why": f"Demographic parity difference ({dp:.2f}) exceeds acceptable threshold",
-                "priority": "high",
-                "component": "fairness"
-            })
-        elif dp > 0.1:
-            recommendations.append({
-                "action": "Monitor fairness metrics and consider bias mitigation",
-                "why": f"Mild bias detected (DP={dp:.2f})",
-                "priority": "medium",
-                "component": "fairness"
-            })
+        # Fairness recommendations (only if evaluated)
+        if fairness_evaluated:
+            if dp > 0.2:
+                recommendations.append({
+                    "action": "Apply fairness interventions (reweighting, adversarial debiasing)",
+                    "why": f"Demographic parity difference ({dp:.2f}) exceeds acceptable threshold",
+                    "priority": "high",
+                    "component": "fairness"
+                })
+            elif dp > 0.1:
+                recommendations.append({
+                    "action": "Monitor fairness metrics and consider bias mitigation",
+                    "why": f"Mild bias detected (DP={dp:.2f})",
+                    "priority": "medium",
+                    "component": "fairness"
+                })
         
         # Robustness recommendations
         if delta > 0.2:
@@ -918,7 +1071,8 @@ class MetaEvaluator:
         trust_score: float,
         flags: List[str],
         non_compensatory_override: bool = False,
-        non_compensatory_failures: Optional[List[Tuple[str, float]]] = None
+        non_compensatory_failures: Optional[List[Tuple[str, float]]] = None,
+        fairness_evaluated: bool = True
     ) -> Dict[str, Any]:
         """
         Generate final verdict based on trust score and flags
@@ -928,6 +1082,7 @@ class MetaEvaluator:
             flags: List of warning/issue flags
             non_compensatory_override: If True, any component fell below threshold
             non_compensatory_failures: List of (component_name, score) that failed
+            fairness_evaluated: If False, append "(Fairness Unverified)" to message
         """
         # NON-COMPENSATORY GUARD: Override to High Risk if any component critically low
         if non_compensatory_override:
@@ -935,12 +1090,13 @@ class MetaEvaluator:
             failure_details = ", ".join([f"{n}={s:.2f}" for n, s in failure_list])
             return {
                 "status": "high_risk",
-                "message": f"🚨 HIGH RISK - Critical component failure: {failure_details}",
+                "message": f"🚨 HIGH RISK - Critical component failure: {failure_details}" + ("" if fairness_evaluated else " (Fairness Unverified)"),
                 "confidence": round(trust_score, 2),
                 "critical_issues": len(failure_list),
                 "total_issues": len(flags),
                 "trust_level": "critical",
-                "non_compensatory_triggered": True
+                "non_compensatory_triggered": True,
+                "fairness_evaluated": fairness_evaluated
             }
         
         critical_flags = [f for f in flags if any(
@@ -949,22 +1105,32 @@ class MetaEvaluator:
         
         if trust_score >= 85 and len(critical_flags) == 0:
             status = "high_trust"
-            message = "✅ Model shows HIGH TRUST - Production ready with confidence"
+            if fairness_evaluated:
+                message = "✅ HIGH TRUST - Production ready"
+            else:
+                message = "✅ HIGH TRUST - Production ready — run fairness audit first"
         elif trust_score >= 70 and len(critical_flags) == 0:
             status = "moderate_trust"
-            message = "✅ Model shows MODERATE TRUST - Production ready with monitoring"
+            if fairness_evaluated:
+                message = "✅ MODERATE TRUST - Production ready with monitoring"
+            else:
+                message = "✅ MODERATE TRUST - Production ready with monitoring — run fairness audit first"
         elif trust_score >= 50:
             status = "low_trust"
-            message = "⚠️ Model shows LOW TRUST - Improvements needed before production"
+            message = "⚠️ LOW TRUST - Improvements needed before production"
         else:
             status = "untrusted"
-            message = "❌ Model is UNTRUSTED - Not recommended for production use"
+            message = "❌ UNTRUSTED - Do not deploy"
         
         # Override if critical issues exist
         if len(critical_flags) > 0:
             if status in ["high_trust", "moderate_trust"]:
                 status = "conditional_trust"
-                message = "⚠️ Model has critical issues that must be addressed"
+                message = "⚠️ CONDITIONAL TRUST - Critical issues must be addressed"
+        
+        # Append fairness unverified suffix if applicable
+        fairness_tag = "" if fairness_evaluated else " (Fairness Unverified)"
+        message = f"{message}{fairness_tag}"
         
         return {
             "status": status,
@@ -973,7 +1139,8 @@ class MetaEvaluator:
             "critical_issues": len(critical_flags),
             "total_issues": len(flags),
             "trust_level": self._get_trust_level(trust_score),
-            "non_compensatory_triggered": False
+            "non_compensatory_triggered": False,
+            "fairness_evaluated": fairness_evaluated
         }
     
     def _get_trust_level(self, score: float) -> str:

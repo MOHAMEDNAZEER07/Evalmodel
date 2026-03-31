@@ -30,6 +30,25 @@ export function InsightsAIChat({
   modelFramework,
   evalScore,
   modelMetrics,
+  // Hybrid Trust Framework props
+  trustScore,
+  metaScore,
+  dii,
+  componentScores,
+  riskValues,
+  hybridWeights,
+  datasetHealthScore,
+  metaFlags,
+  metaRecommendations,
+  metaVerdict,
+  // Explainability props
+  featureImportance,
+  explainabilityMethod,
+  shapSummary,
+  // Fairness props
+  fairnessMetrics,
+  groupMetrics,
+  sensitiveAttribute,
   inline = false,
   allEvaluations = [],
   allModels = [],
@@ -159,6 +178,10 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
     const allEvalsContext = buildAllEvaluationsContext(allEvaluations, allModels, allDatasets);
     return buildContextMessage(insightType, allEvalsContext, {
       modelName, modelType, modelFramework, datasetName, evalScore, modelMetrics,
+      trustScore, metaScore, dii, componentScores, riskValues, hybridWeights,
+      datasetHealthScore, metaFlags, metaRecommendations, metaVerdict,
+      featureImportance, explainabilityMethod, shapSummary,
+      fairnessMetrics, groupMetrics, sensitiveAttribute,
       qualityScore, outlierCount, correlationCount, issues, summary,
     });
   };
@@ -270,11 +293,42 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
 
         setMessages(prev => [...prev, assistantMessage]);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error sending message:", error);
+      
+      // Extract meaningful error info
+      let errorDetail = "";
+      if (error?.message) {
+        errorDetail = error.message;
+      }
+      if (error?.context) {
+        try {
+          const body = typeof error.context === 'string' ? JSON.parse(error.context) : error.context;
+          if (body?.error) errorDetail = body.error;
+          if (body?.code) errorDetail += ` (${body.code})`;
+        } catch { /* ignore parse errors */ }
+      }
+      
+      let userMessage = "I'm sorry, I encountered an error.";
+      if (errorDetail.includes("GEMINI_API_KEY") || errorDetail.includes("NO_API_KEY")) {
+        userMessage += " The AI service API key is not configured. Please contact the administrator.";
+      } else if (errorDetail.includes("Rate limit") || errorDetail.includes("429")) {
+        userMessage += " You're sending messages too quickly. Please wait a moment and try again.";
+      } else if (errorDetail.includes("circuit") || errorDetail.includes("503")) {
+        userMessage += " The AI service is temporarily unavailable. Please try again in a few minutes.";
+      } else if (errorDetail.includes("Failed to fetch") || errorDetail.includes("NetworkError") || errorDetail.includes("TypeError")) {
+        userMessage += " Could not reach the AI service. Please check your internet connection and try again.";
+      } else if (errorDetail) {
+        userMessage += ` Details: ${errorDetail}`;
+      } else {
+        userMessage += " Please try again later.";
+      }
+      
+      console.error("🔍 AI Chat Error Detail:", errorDetail || "No details available");
+      
       const errorMessage: Message = {
         role: "assistant",
-        content: "I'm sorry, I encountered an error. Please try again later.",
+        content: userMessage,
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);

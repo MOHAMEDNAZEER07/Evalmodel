@@ -1,10 +1,37 @@
 // prompts.ts – System prompt builders for each mode
 // deno-lint-ignore-file
 
+// ─── Platform Metric Definitions (injected into every mode) ──────────────────
+
+const PLATFORM_METRICS_DEFINITIONS = `
+EVALMODEL PLATFORM METRICS — YOU MUST KNOW THESE:
+- EvalScore (0–100): Unified model performance score combining accuracy/F1/R² into a single number.
+- Trust Score (0–100): Overall trustworthiness of the model's performance, computed by the MetaEvaluator.
+- DII — Data Instability Index (0–1): Measures dataset trustworthiness.
+  Formula: DII = (I + M + D + S) / 4
+    I = Class Imbalance  (0=balanced, 1=severely imbalanced)
+    M = Missing Values   (0=none, 1=all missing)
+    D = Duplicate Rows   (0=none, 1=all duplicates)
+    S = Skewness         (0=normal distribution, 1=highly skewed)
+  Interpretation: 0 = perfectly clean data, 1 = completely unstable data.
+  When a user asks "what is the DII" or "what is the DII score", always answer
+  using the above definition and look for the DII value in the evaluation data provided.
+- Component Scores (each 0–1):
+    P = Performance   (model accuracy/F1/R²)
+    H = Health        (dataset quality, DII-adjusted)
+    F = Fairness      (group parity; only present when sensitive_attribute is set)
+    R = Robustness    (stability under perturbation)
+- Lambda (λ): Blending parameter between automatic component weights and user-defined weights.
+- Non-Compensatory Guard: If ANY component score falls below its threshold, the model is flagged
+  high_risk regardless of the overall Trust Score.
+- MetaEvaluator: The trust framework module that computes Trust Score from the four component scores.
+- Verdict: Categorical result — "trusted", "use_with_caution", or "high_risk".
+`;
+
 // ─── Model Insights ──────────────────────────────────────────────────────────
 
 export function buildModelInsightsPrompt(context: Record<string, unknown>): string {
-  let systemPrompt = `You are a SPECIALIZED Model Performance Analyst. Your ONLY job is to help users understand and improve THEIR SPECIFIC models that have been evaluated.
+  let systemPrompt = `You are a SPECIALIZED Model Performance Analyst with deep expertise in the Hybrid Trust Framework (MetaEvaluator). Your ONLY job is to help users understand and improve THEIR SPECIFIC models that have been evaluated.
 
 STRICT RULES:
 1. NEVER provide general Python code or tutorials
@@ -17,13 +44,20 @@ STRICT RULES:
 Your expertise:
 - Interpreting THEIR model's evaluation metrics
 - Explaining what THEIR accuracy, precision, recall, F1 scores mean in context
+- Explaining the Hybrid Trust Framework: Trust Score, DII (Data Instability Index), component scores (P, H, F, R), risk values, and lambda weights
+- Interpreting fairness metrics, sensitive attributes, and group-level disparities
+- Explaining feature importance and SHAP-based explainability results
 - Identifying specific strengths and weaknesses in THEIR models
 - Comparing THEIR metrics against typical benchmarks
 - Suggesting concrete improvements based on THEIR actual performance
 - Explaining why THEIR model might be underperforming in certain areas
 - Comparing different models' performance against each other
+- Interpreting meta verdicts, flags, and recommendations from the evaluator
 
 If asked about code, tutorials, or general ML topics, respond: "I'm here to analyze YOUR specific model performance. For general ML help, please use the general AI assistant (purple icon). Let's focus on improving your current model - what would you like to know about your metrics?"`;
+
+  // Inject platform metric definitions so the LLM always knows them
+  systemPrompt += `\n\n${PLATFORM_METRICS_DEFINITIONS}`;
 
   // Add all evaluations for comprehensive context
   const allEvaluations = context?.allEvaluations;
@@ -52,6 +86,71 @@ If asked about code, tutorials, or general ML topics, respond: "I'm here to anal
         if (typeof m.rmse === "number") systemPrompt += ` RMSE=${(m.rmse as number).toFixed(4)}`;
         if (typeof m.r2_score === "number") systemPrompt += ` R²=${(m.r2_score as number).toFixed(4)}`;
       }
+
+      // Hybrid Trust Framework data
+      if (typeof ev.trust_score === "number") systemPrompt += `\nTrust Score: ${(ev.trust_score as number).toFixed(2)}/1.0`;
+      if (typeof ev.DII === "number") systemPrompt += `\nDII (Data Instability Index): ${(ev.DII as number).toFixed(4)}`;
+      if (ev.meta_verdict) {
+        const vd = ev.meta_verdict as Record<string, unknown>;
+        systemPrompt += `\nVerdict: ${vd?.message || vd?.status || JSON.stringify(vd)}`;
+      }
+      if (typeof ev.dataset_health_score === "number") systemPrompt += `\nDataset Health: ${(ev.dataset_health_score as number).toFixed(2)}`;
+
+      const cs = ev.component_scores as Record<string, number> | undefined;
+      if (cs && typeof cs === "object") {
+        const parts = Object.entries(cs).map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(3) : v}`).join(", ");
+        systemPrompt += `\nComponent Scores: ${parts}`;
+      }
+
+      const rv = ev.risk_values as Record<string, number> | undefined;
+      if (rv && typeof rv === "object") {
+        const parts = Object.entries(rv).map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(3) : v}`).join(", ");
+        systemPrompt += `\nRisk Values: ${parts}`;
+      }
+
+      const hw = ev.hybrid_weights as Record<string, number> | undefined;
+      if (hw && typeof hw === "object") {
+        const parts = Object.entries(hw).map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(3) : v}`).join(", ");
+        systemPrompt += `\nHybrid Weights (λ): ${parts}`;
+      }
+
+      // Fairness
+      if (ev.sensitive_attribute) systemPrompt += `\nSensitive Attribute: ${ev.sensitive_attribute}`;
+      const fm = ev.fairness_metrics as Record<string, unknown> | undefined;
+      if (fm && typeof fm === "object") {
+        const parts = Object.entries(fm).map(([k, v]) => `${k}=${typeof v === 'number' ? (v as number).toFixed(4) : v}`).join(", ");
+        systemPrompt += `\nFairness Metrics: ${parts}`;
+      }
+
+      // Explainability
+      if (ev.explainability_method) systemPrompt += `\nExplainability: ${ev.explainability_method}`;
+      const fi = ev.feature_importance as Array<Record<string, unknown>> | Record<string, unknown> | undefined;
+      if (fi && Array.isArray(fi) && fi.length > 0) {
+        const top5 = (fi as Array<Record<string, unknown>>)
+          .sort((a, b) => ((b.importance as number) || 0) - ((a.importance as number) || 0))
+          .slice(0, 5)
+          .map((item) => `${item.feature}=${typeof item.importance === 'number' ? (item.importance as number).toFixed(4) : item.importance}`)
+          .join(", ");
+        systemPrompt += `\nTop Features: ${top5}`;
+      } else if (fi && !Array.isArray(fi) && typeof fi === "object") {
+        const top5 = Object.entries(fi as Record<string, unknown>)
+          .sort(([, a], [, b]) => ((b as number) || 0) - ((a as number) || 0))
+          .slice(0, 5)
+          .map(([k, v]) => `${k}=${typeof v === 'number' ? (v as number).toFixed(4) : v}`)
+          .join(", ");
+        systemPrompt += `\nTop Features: ${top5}`;
+      }
+
+      // Flags & recommendations
+      const flags = ev.meta_flags as string[] | undefined;
+      if (flags && Array.isArray(flags) && flags.length > 0) {
+        systemPrompt += `\nFlags: ${flags.join(", ")}`;
+      }
+      const recs = ev.meta_recommendations as Array<Record<string, string>> | undefined;
+      if (recs && Array.isArray(recs) && recs.length > 0) {
+        const recTexts = recs.map((r) => typeof r === 'object' ? `[${r.priority}] ${r.action}` : String(r));
+        systemPrompt += `\nRecommendations: ${recTexts.join("; ")}`;
+      }
     });
     systemPrompt += `\n==========================================`;
   }
@@ -78,6 +177,12 @@ If asked about code, tutorials, or general ML topics, respond: "I'm here to anal
       if (typeof m.r2_score === "number") systemPrompt += `\n  • R² Score: ${(m.r2_score as number).toFixed(4)}`;
     }
     systemPrompt += `\n=====================================`;
+  }
+
+  // Append rich contextMessage from frontend (includes MetaEvaluator, fairness, explainability)
+  const contextMessage = context?.contextMessage as string | undefined;
+  if (contextMessage && typeof contextMessage === "string") {
+    systemPrompt += `\n\n${contextMessage}`;
   }
 
   systemPrompt += `\n\nEXAMPLES OF GOOD RESPONSES:
@@ -117,7 +222,12 @@ Your expertise:
 - Determining if THEIR dataset is ready for modeling
 - Explaining how data quality impacts their model evaluations
 
-If asked about code, tutorials, or general data science topics, respond: "I'm here to analyze YOUR specific dataset quality. For general data science help, please use the general AI assistant (purple icon). Let's focus on YOUR data - what would you like to know about your quality metrics?"`;
+If asked about code, tutorials, or general data science topics that are NOT related to this platform's own metrics, respond: "I'm here to analyze YOUR specific dataset quality. For general data science help, please use the general AI assistant (purple icon). Let's focus on YOUR DATA - what would you like to know about your quality metrics?"
+
+NEVER redirect a question about EvalModel platform metrics. If the user asks about DII, Trust Score, EvalScore, component scores (P, H, F, R), lambda, MetaEvaluator, guard, verdict, or any other EvalModel-specific term — always answer directly using the data provided here.`;
+
+  // Inject platform metric definitions so the LLM always knows them
+  systemPrompt += `\n\n${PLATFORM_METRICS_DEFINITIONS}`;
 
   // Add all evaluations for context on how models performed with this dataset
   const allEvaluations = context?.allEvaluations;
@@ -135,6 +245,21 @@ If asked about code, tutorials, or general data science topics, respond: "I'm he
         if (typeof m.f1_score === "number") metrics.push(`F1=${((m.f1_score as number) * 100).toFixed(1)}%`);
         if (typeof m.r2_score === "number") metrics.push(`R²=${(m.r2_score as number).toFixed(3)}`);
         if (metrics.length > 0) systemPrompt += ` (${metrics.join(", ")})`;
+      }
+      if (typeof ev.trust_score === "number") systemPrompt += `\n    Trust Score: ${(ev.trust_score as number).toFixed(2)}/1.0`;
+      if (typeof ev.DII === "number") systemPrompt += `\n    DII (Data Instability Index): ${(ev.DII as number).toFixed(4)}`;
+      const diiC = ev.dii_components as Record<string, number> | undefined;
+      if (diiC && typeof diiC === "object") {
+        systemPrompt += ` (I=${diiC.I?.toFixed(3) ?? 0}, M=${diiC.M?.toFixed(3) ?? 0}, D=${diiC.D?.toFixed(3) ?? 0}, S=${diiC.S?.toFixed(3) ?? 0})`;
+      }
+      const cs = ev.component_scores as Record<string, number> | undefined;
+      if (cs && typeof cs === "object") {
+        const csParts = Object.entries(cs).map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(3) : v}`).join(", ");
+        systemPrompt += `\n    Component Scores: ${csParts}`;
+      }
+      if (ev.meta_verdict) {
+        const vd = ev.meta_verdict as Record<string, unknown>;
+        systemPrompt += `\n    Verdict: ${vd?.message || vd?.status || JSON.stringify(vd)}`;
       }
     });
     systemPrompt += `\n===============================================`;
@@ -155,6 +280,12 @@ If asked about code, tutorials, or general data science topics, respond: "I'm he
       systemPrompt += `\n\nAI Analysis: ${info.summary}`;
     }
     systemPrompt += `\n==============================================`;
+  }
+
+  // Append rich contextMessage from frontend for dataset mode too
+  const contextMessage = context?.contextMessage as string | undefined;
+  if (contextMessage && typeof contextMessage === "string") {
+    systemPrompt += `\n\n${contextMessage}`;
   }
 
   systemPrompt += `\n\nEXAMPLES OF GOOD RESPONSES:

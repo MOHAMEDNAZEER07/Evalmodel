@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Allowed file extensions
-ALLOWED_EXTENSIONS = {'.pkl', '.pt', '.pth', '.h5', '.onnx'}
+ALLOWED_EXTENSIONS = {'.pkl', '.pt', '.pth', '.h5', '.onnx', '.joblib'}
 
 def validate_model_file(filename: Optional[str]) -> bool:
     """Validate model file extension (accept Optional filename for type-safety)"""

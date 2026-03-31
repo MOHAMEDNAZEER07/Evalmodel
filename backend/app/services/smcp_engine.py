@@ -308,13 +308,19 @@ class SMCPEngine:
         model,
         X_test: np.ndarray,
         y_test: np.ndarray,
-        framework: ModelFramework
+        framework: ModelFramework,
+        feature_names: Optional[List[str]] = None
     ) -> MetricsResult:
         """Evaluate classification model"""
         try:
             # Get predictions based on framework
             if framework == ModelFramework.SKLEARN:
-                y_pred = model.predict(X_test)
+                # Wrap in DataFrame to preserve feature names and suppress sklearn warnings
+                if feature_names is not None:
+                    X_input = pd.DataFrame(X_test, columns=feature_names)
+                else:
+                    X_input = X_test
+                y_pred = model.predict(X_input)
             
             elif framework == ModelFramework.ONNX:
                 # ONNX models use the wrapper with predict() interface
@@ -353,13 +359,19 @@ class SMCPEngine:
         model,
         X_test: np.ndarray,
         y_test: np.ndarray,
-        framework: ModelFramework
+        framework: ModelFramework,
+        feature_names: Optional[List[str]] = None
     ) -> MetricsResult:
         """Evaluate regression model"""
         try:
             # Get predictions
             if framework == ModelFramework.SKLEARN:
-                y_pred = model.predict(X_test)
+                # Wrap in DataFrame to preserve feature names and suppress sklearn warnings
+                if feature_names is not None:
+                    X_input = pd.DataFrame(X_test, columns=feature_names)
+                else:
+                    X_input = X_test
+                y_pred = model.predict(X_input)
             
             elif framework == ModelFramework.ONNX:
                 # ONNX models use the wrapper with predict() interface
@@ -478,29 +490,40 @@ class SMCPEngine:
     def calculate_eval_score(
         self,
         metrics: MetricsResult,
-        model_type: ModelType
+        model_type: ModelType,
+        y_true: Optional[np.ndarray] = None,
+        std_y: Optional[float] = None,
     ) -> EvalScoreResult:
         """
         Calculate unified EvalScore (0-100) from metrics.
-        
+
         Formula:
             EvalScore = 100 × Σ(weight_i × normalized_metric_i)
-        
+
         Normalization:
             - Benefit metrics (higher is better): clip to [0, 1]
-            - Cost metrics (lower is better): transform via 1/(1+value)
-        
+            - Cost metrics (lower is better): 1/(1 + value/scale)
+              where scale = std(y_true), falling back to range(y)/4 for
+              near-constant targets, then to 1.0 as last resort.
+
         Args:
-            metrics: MetricsResult containing raw metric values
+            metrics:    MetricsResult containing raw metric values
             model_type: Type of model for weight selection
-            
+            y_true:     Raw target array — used to derive the scale factor
+                        for scale-invariant MAE/RMSE normalization.
+            std_y:      Pre-computed std(y) — ignored when y_true is given.
+
         Returns:
             EvalScoreResult with eval_score in [0, 100]
-            
-        Mathematical Guarantees:
-            - EvalScore ∈ [0, 100]
-            - All normalized metrics ∈ [0, 1]
         """
+        # Derive scale factor from y_true when available (preferred)
+        if y_true is not None and len(y_true) > 1:
+            _std = float(np.std(y_true))
+            if _std < 1e-10:
+                _range = float(np.max(y_true) - np.min(y_true))
+                std_y = _range / 4.0 if _range > 1e-10 else None
+            else:
+                std_y = _std
         weights = self.METRIC_WEIGHTS.get(model_type, {})
         normalized_metrics = {}
         total_score = 0.0
@@ -517,15 +540,23 @@ class SMCPEngine:
                 
                 # Normalize metric to 0-1 range
                 if metric_name in ['mae', 'mse', 'rmse', 'perplexity']:
-                    # Lower is better - invert and cap
-                    normalized = 1 / (1 + value) if value >= 0 else 0
+                    # Lower is better — scale-invariant: 1/(1 + value/scale)
+                    # Guarantees output in (0, 1]: 1.0 when value=0, →0 as value→∞
+                    if value >= 0:
+                        divisor = std_y if std_y and std_y > 1e-10 else 1.0
+                        # MSE is in squared units, so scale factor is std_y²
+                        if metric_name == 'mse':
+                            divisor = divisor ** 2
+                        normalized = min(1.0, max(0.0, 1.0 / (1.0 + value / divisor)))
+                    else:
+                        normalized = 0.0
                 else:
-                    # Higher is better - already 0-1 range typically
-                    normalized = min(max(value, 0), 1)
+                    # Higher is better — clip to [0, 1]
+                    normalized = min(1.0, max(0.0, float(value)))
                 
-                # Assert normalized value is in valid range
-                assert 0.0 <= normalized <= 1.0, \
-                    f"Normalized metric {metric_name} out of range [0,1]: {normalized}"
+                # Validate normalized value is in valid range
+                if not (0.0 <= normalized <= 1.0):
+                    raise ValueError(f"Normalized metric {metric_name} out of range [0,1]: {normalized}")
                 
                 normalized_metrics[metric_name] = float(normalized)
                 total_score += normalized * weight
@@ -533,9 +564,9 @@ class SMCPEngine:
         # Scale to 0-100 and clip for safety
         eval_score = min(100.0, max(0.0, total_score * 100))
         
-        # Assert eval_score is in valid range
-        assert 0.0 <= eval_score <= 100.0, \
-            f"EvalScore out of range [0,100]: {eval_score}"
+        # Validate eval_score is in valid range
+        if not (0.0 <= eval_score <= 100.0):
+            raise ValueError(f"EvalScore out of range [0,100]: {eval_score}")
         
         return EvalScoreResult(
             eval_score=float(round(eval_score, 2)),
@@ -566,15 +597,16 @@ class SMCPEngine:
                 # Assume last column is target if not specified
                 target_column = df.columns[-1]
             
-            X = np.asarray(df.drop(columns=[target_column]).values, dtype=np.float64)
+            feature_names = [col for col in df.columns if col != target_column]
+            X = np.asarray(df[feature_names].values, dtype=np.float64)
             y = np.asarray(df[target_column].values)
             
             # Evaluate based on model type
             if model_type == ModelType.CLASSIFICATION:
-                metrics = self.evaluate_classification(model, X, y, framework)
+                metrics = self.evaluate_classification(model, X, y, framework, feature_names)
             
             elif model_type == ModelType.REGRESSION:
-                metrics = self.evaluate_regression(model, X, y, framework)
+                metrics = self.evaluate_regression(model, X, y, framework, feature_names)
             
             elif model_type == ModelType.NLP:
                 metrics = self.evaluate_nlp(model, df, framework)
@@ -585,8 +617,10 @@ class SMCPEngine:
             else:
                 raise ValueError(f"Unsupported model type: {model_type}")
             
-            # Calculate EvalScore
-            eval_score = self.calculate_eval_score(metrics, model_type)
+            # Calculate EvalScore with scale-invariant normalization.
+            # Pass y_true so calculate_eval_score can derive std(y) with the
+            # range/4 fallback for near-constant targets.
+            eval_score = self.calculate_eval_score(metrics, model_type, y_true=y)
             
             return metrics, eval_score
         

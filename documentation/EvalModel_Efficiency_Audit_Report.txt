@@ -1,0 +1,323 @@
+EVALMODEL
+Efficiency Defects & Improvement Report
+Universal AI Model Evaluation Platform  —  Full Technical Audit
+Version 2.0  |  March 2026  |  Final Year Project
+13
+Total Issues Found5
+Critical / High5
+Medium3
+Low Priority
+
+Executive Summary
+This document is a full technical audit of EvalModel — a Universal AI Model Evaluation Platform built as a Final Year Project. It identifies every efficiency defect, architectural risk, methodology gap, and improvement opportunity found across the entire codebase and system design.
+
+Issues are grouped into five categories: Backend & Performance, Security, Methodology & Math, Frontend & UX, and Quick Wins. Each issue includes a severity rating, a clear explanation of the problem, and a concrete, actionable fix.
+
+The platform has a genuinely strong foundation — the Hybrid Trust Framework and non-compensatory guards are legitimately research-grade design decisions. However, several efficiency defects would cause real problems in a demo or production scenario and need to be addressed before submission.
+
+Master Issue Index
+All 13 issues listed below. Fix order should follow: Critical ? High ? Medium ? Low.
+
+#Issue TitleSeverityCategoryB-1Synchronous evaluation pipeline blocks HTTP requestCRITICALBackendB-2SHAP KernelExplainer is unbounded — will time out on large dataCRITICALBackendB-3Full dataset loaded into memory on every evaluationHIGHBackendB-4Compare endpoint re-runs SMCP even for already-evaluated modelsHIGHBackendS-1JWT tokens stored in localStorage — XSS vulnerabilityHIGHSecurityM-1Fairness F silently defaults to 1.0 when no sensitive attributeHIGHMethodologyM-2Robustness score requires train metrics that aren't collectedHIGHMethodologyM-3Cost metric normalization 1/(1+x) is target-scale dependentMEDIUMMethodologyM-4DII treats all four components with equal weightMEDIUMMethodologyM-5NLP uses BLEU/ROUGE — known poor proxies for language qualityMEDIUMMethodologyA-1AI Chat sends full evaluation history on every message — token blowoutMEDIUMAI / ChatA-2LIME averages only 10 samples — statistically noisyMEDIUMMethodologyU-1No evaluation result caching — same work repeated unnecessarilyLOWBackend
+
+
+01  Backend & Performance Issues
+Defects that affect speed, memory, and reliability of the evaluation pipeline
+B-1  |  Synchronous Evaluation Pipeline  [CRITICAL]
+ProblemPOST /api/evaluation/evaluate runs all 37 pipeline steps synchronously inside a single HTTP request. SHAP KernelExplainer alone can take 30–120 seconds on a non-tree model. The HTTP client just hangs and waits.ImpactRequest timeouts in production. Blocks FastAPI worker thread. Frontend has no progress feedback. Demo will fail on any large model.Root CauseNo async task queue. Everything runs in-process on the request thread.FixUse FastAPI BackgroundTasks (quick fix) or Celery + Redis (proper fix). Return a job_id immediately, then have the frontend poll /api/evaluation/status/{job_id}.
+Quick Fix — FastAPI BackgroundTasks
+# routes/evaluation.py
+from fastapi import BackgroundTasks
+
+@router.post('/evaluate')
+async def evaluate(req: EvalRequest, bg: BackgroundTasks, db=Depends(get_db)):
+    job_id = str(uuid4())
+    await db.set_job_status(job_id, 'pending')
+    bg.add_task(run_full_pipeline, job_id, req)  # non-blocking
+    return {'job_id': job_id, 'status': 'pending'}
+
+@router.get('/status/{job_id}')
+async def get_status(job_id: str, db=Depends(get_db)):
+    return await db.get_job(job_id)  # frontend polls this
+Production Fix — Celery + Redis
+# tasks.py
+from celery import Celery
+app = Celery('evalmodel', broker='redis://localhost:6379/0')
+
+@app.task
+def run_evaluation_task(job_id: str, model_id: str, dataset_id: str):
+    result = full_pipeline(model_id, dataset_id)
+    save_result_to_db(job_id, result)
+B-2  |  SHAP KernelExplainer Unbounded — Will Time Out  [CRITICAL]
+ProblemYour fallback chain uses KernelExplainer when TreeExplainer fails. KernelExplainer is O(2^n features) in the worst case and requires running model inference hundreds of times. On a dataset with 50+ features, this takes minutes and will crash or time out.ImpactSystem hangs on any non-tree model with >30 features. KernelExplainer is a known SHAP performance pitfall — it's documented in the SHAP library itself.Root CauseNo background data budget or sample cap passed to KernelExplainer.FixAlways use shap.kmeans() to compress background data to ?100 representative samples. Also cap X_test to 200 rows max for SHAP computation.
+Fix — Cap SHAP Background Data
+import shap
+
+# BEFORE (dangerous — no limit)
+explainer = shap.KernelExplainer(model.predict, X_train)
+
+# AFTER (safe — capped background)
+background = shap.kmeans(X_train, min(50, len(X_train)))  # max 50 clusters
+X_sample = X_test[:200]  # never pass full test set
+explainer = shap.KernelExplainer(model.predict, background)
+shap_values = explainer.shap_values(X_sample, nsamples=100)
+B-3  |  Full Dataset Loaded Into Memory Every Evaluation  [HIGH]
+ProblemThe pipeline downloads the entire CSV and loads it into pandas on every evaluation call. With your 1024MB upload limit, a large dataset will spike RAM, slow down the server, and potentially crash the process.ImpactMemory exhaustion on large datasets. No streaming or chunking. Will affect all other concurrent users on the server.Root Causepd.read_csv() with no chunking or row limits in the pipeline.FixCap dataset rows for SHAP/LIME at 5000 rows. For DII computation, use chunked reading. For metrics, use a stratified sample if >10,000 rows.
+Fix — Row Sampling and Chunked Reading
+import pandas as pd
+
+def load_dataset_safe(path: str, max_rows_eval: int = 10000, max_rows_shap: int = 2000):
+    # Get row count without loading full file
+    total_rows = sum(1 for _ in open(path)) - 1
+
+    if total_rows > max_rows_eval:
+        # Stratified sample for evaluation
+        df = pd.read_csv(path, skiprows=lambda i: i > 0 and i > max_rows_eval)
+    else:
+        df = pd.read_csv(path)
+
+    return df, df.sample(min(max_rows_shap, len(df)))  # (full, shap_sample)
+B-4  |  Compare Endpoint Re-Runs SMCP on Already-Evaluated Models  [HIGH]
+ProblemPOST /api/evaluation/compare re-runs the full 37-step pipeline for every selected model — even models that have already been evaluated against the same dataset. This is pure wasted computation.ImpactComparing 5 models takes 5x the time it should. If evaluations are cached, compare is near-instant.Root CauseNo cache-check before running the pipeline.FixBefore running SMCP, query the evaluations table for an existing (model_id, dataset_id) pair. Return cached result if found.
+Fix — Check Cache Before Running Pipeline
+async def compare_models(model_ids: list, dataset_id: str, db):
+    results = []
+    for model_id in model_ids:
+        # Check if already evaluated
+        cached = await db.get_evaluation(model_id=model_id, dataset_id=dataset_id)
+        if cached:
+            results.append(cached)  # use cached result
+        else:
+            result = await run_smcp_pipeline(model_id, dataset_id)
+            results.append(result)
+    return results
+
+
+02  Security Issues
+Vulnerabilities that expose users or data to risk
+S-1  |  JWT Tokens Stored in localStorage — XSS Vulnerability  [HIGH]
+ProblemTokens are stored in localStorage and accessed by JavaScript on every request. localStorage is readable by ANY JavaScript on the page, making it vulnerable to Cross-Site Scripting (XSS) attacks. If a malicious script runs, it can steal the JWT and impersonate the user.ImpactComplete account takeover via XSS. This is a well-documented security anti-pattern — OWASP explicitly recommends against storing tokens in localStorage.Root CauseConvenience during development. Standard Supabase client examples use localStorage by default.FixSwitch to httpOnly cookies for token storage. Supabase Auth supports this via the storageKey and cookie-based session configuration. httpOnly cookies are inaccessible to JavaScript by design.
+Fix — Use httpOnly Cookies via Supabase
+// frontend/src/lib/supabase.ts
+import { createClient } from '@supabase/supabase-js'
+
+// BEFORE (insecure — uses localStorage by default)
+export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+// AFTER (secure — use secure cookie storage)
+export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    storage: {
+      getItem: (key) => document.cookie.match(key),  // or use a cookie lib
+      setItem: (key, val) => { /* set httpOnly via backend endpoint */ },
+      removeItem: (key) => { /* clear cookie */ }
+    },
+    persistSession: true,
+    autoRefreshToken: true
+  }
+})
+
+// Simpler: set token via backend Set-Cookie header (httpOnly; Secure; SameSite=Strict)
+
+
+03  Methodology & Mathematical Issues
+Logic gaps and flawed formulas that produce incorrect or misleading scores
+M-1  |  Fairness F Silently Defaults to 1.0 When No Sensitive Attribute  [HIGH]
+ProblemWhen no sensitive attribute is provided, F (Fairness component) is set to 1.0 — meaning perfect fairness is assumed. This inflates the Trust Score for every model evaluated without a fairness audit.ImpactA model with genuinely bad fairness could score High Trust just because the user didn't specify a sensitive attribute. This is a silent, dangerous assumption.Why It's WrongAbsence of evidence is not evidence of absence. You haven't tested fairness, so you shouldn't assume it passes.FixOption A: Default F to 0.5 (neutral/unknown). Option B: Exclude F from the trust score entirely and adjust weights to sum to 1 across P, H, R only. Option B is cleaner and more honest.
+Fix — Exclude F When Not Evaluated (Option B, Recommended)
+def compute_trust_score(P, H, F, R, fairness_evaluated: bool):
+    if fairness_evaluated:
+        components = {'P': P, 'H': H, 'F': F, 'R': R}
+    else:
+        components = {'P': P, 'H': H, 'R': R}  # F excluded
+        # Note in output: 'Fairness not evaluated — F excluded from Trust Score'
+
+    risk_values = {k: 1 - v for k, v in components.items()}
+    total_risk = sum(risk_values.values())
+    auto_weights = {k: r / total_risk for k, r in risk_values.items()}
+    # ... rest of pipeline unchanged
+    return trust_score, auto_weights
+M-2  |  Robustness Score Requires Train Metrics That Are Never Collected  [HIGH]
+ProblemR = 1 - |train_metric - test_metric| requires BOTH a training set metric AND a test set metric. But the upload flow only takes a single CSV — not separate train/test splits. If train_metric is computed on the same uploaded dataset as test_metric, Robustness is measuring nothing real.ImpactR score is either silently wrong (measuring nothing) or computed incorrectly. If an examiner asks 'how did you get the train metric?', there's no good answer.Fix A (Minimal)Auto-split the uploaded dataset 80/20. Train the model's output on 80%, evaluate on 20%. Use the 80% as pseudo-train metrics.Fix B (Proper)Add a second optional CSV upload: 'Training Dataset (optional)'. If provided, compute proper train/test split metrics. If not, label R as 'Not Evaluated' (same approach as Fix B for M-1).
+Fix — Auto Split for Robustness Estimation
+from sklearn.model_selection import train_test_split
+
+def compute_robustness(model, X, y):
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y if is_classification else None
+    )
+    # Compute metric on both splits using model predictions
+    train_metric = compute_primary_metric(model, X_train, y_train)
+    test_metric  = compute_primary_metric(model, X_test, y_test)
+    robustness   = max(0.0, 1.0 - abs(train_metric - test_metric))
+    return robustness, train_metric, test_metric
+M-3  |  Cost Metric Normalization 1/(1+x) Is Target-Scale Dependent  [MEDIUM]
+ProblemRegression metrics like MAE and RMSE are normalized using 1/(1+MAE). But this formula doesn't account for the scale of the target variable. MAE=2.3 on a 0–1 scale is terrible. MAE=2.3 on house prices (100k–1M) is excellent. Two models on completely different problems get compared unfairly.ImpactRegression EvalScores are not comparable across different problems. A house price model could score 50 while a probability estimator scores 90 — not because one is better, but because of scale.FixNormalize MAE and RMSE relative to the standard deviation of the target variable: normalized = 1 / (1 + MAE/std(y)). This makes the score scale-invariant.
+Fix — Scale-Invariant Normalization
+import numpy as np
+
+def normalize_cost_metric(value: float, y_true: np.ndarray) -> float:
+    """Scale-invariant normalization using target std deviation."""
+    std_y = np.std(y_true)
+    if std_y == 0:
+        return 1.0 / (1.0 + value)  # fallback for constant targets
+    return 1.0 / (1.0 + (value / std_y))  # normalized by scale
+
+# Usage
+normalized_mae  = normalize_cost_metric(mae,  y_test)
+normalized_rmse = normalize_cost_metric(rmse, y_test)
+M-4  |  DII Treats All Four Components With Equal Weight  [MEDIUM]
+ProblemDII = (I + M + D + S) / 4 applies equal weight to imbalance, missing values, duplicates, and skewness. But these do not have equal impact. Missing values (M) corrupt training signals directly. Skewness (S) is often benign with good preprocessing. Equal weighting is an oversimplification.ImpactA dataset with 30% missing values gets the same DII as one with 30% skewed features — even though the former is far more damaging.FixApply weighted DII: DII = 0.35*M + 0.30*I + 0.20*D + 0.15*S. Weights based on established data quality research (missing > imbalance > duplicates > skew). Document the weights explicitly.
+Fix — Weighted DII Formula
+def compute_dii(I: float, M: float, D: float, S: float, mode='balanced') -> float:
+    # Weighted DII — missing values weighted highest
+    W_M, W_I, W_D, W_S = 0.35, 0.30, 0.20, 0.15
+
+    if mode == 'balanced':
+        return W_M*M + W_I*I + W_D*D + W_S*S
+    else:  # strict — multiplicative
+        # Weight each component before multiplicative combination
+        return 1 - (1 - W_M*M) * (1 - W_I*I) * (1 - W_D*D) * (1 - W_S*S)
+M-5  |  NLP Uses BLEU/ROUGE — Known Poor Proxies for Language Quality  [MEDIUM]
+ProblemBLEU and ROUGE are n-gram overlap metrics developed in the early 2000s for machine translation. It is well-established in the NLP research community that they correlate weakly with human judgment of text quality. BLEU in particular penalizes valid paraphrases that don't share n-grams with the reference.ImpactAn NLP model with high BLEU/ROUGE might be low quality and vice versa. Your EvalScore for NLP tasks could be misleading.Fix (Short Term)Add a disclaimer in the UI that BLEU/ROUGE are traditional metrics with known limitations and cite the known issue.Fix (Proper)Integrate BERTScore as a third metric. It uses contextual embeddings and correlates much better with human judgment. Add as weight: BLEU=0.25, ROUGE=0.25, BERTScore=0.30, Perplexity=0.20.
+Fix — Add BERTScore
+# pip install bert-score
+from bert_score import score as bert_score
+
+def compute_nlp_metrics(predictions, references):
+    P, R, F1 = bert_score(predictions, references, lang='en', verbose=False)
+    bertscore = F1.mean().item()  # mean BERTScore F1
+
+    bleu  = compute_bleu(predictions, references)
+    rouge = compute_rouge(predictions, references)
+
+    # Updated EvalScore weights
+    eval_score = 100 * (0.25*bleu + 0.25*rouge + 0.30*bertscore + 0.20*perplexity_norm)
+    return eval_score, {'bleu': bleu, 'rouge': rouge, 'bertscore': bertscore}
+
+
+04  AI Chat Issues
+Defects in the Insights AI and AI Mentor chat systems
+A-1  |  AI Chat Sends Full Evaluation History on Every Message  [MEDIUM]
+ProblembuildAllEvaluationsContext() sends the complete evaluation history as context to the LLM on every single chat message. A user with 50+ evaluations generates a massive context payload — potentially thousands of tokens — sent repeatedly.ImpactHigh API cost per message. Latency increases with history size. Risk of hitting the LLM's context window limit and getting truncated or failed responses.FixSend only the currently selected evaluation as full context. Include only a brief summary (name + EvalScore + verdict) for the last 5 evaluations in history. This reduces context by 80–95% for users with large history.
+Fix — Trim Context to Selected Evaluation + Brief History
+function buildContextMessage(selectedEval, allEvals) {
+  // Full detail for selected evaluation only
+  const selected = formatFullEvalContext(selectedEval)
+
+  // Only brief summary for history (last 5, name + score + verdict)
+  const history = allEvals
+    .filter(e => e.id !== selectedEval.id)
+    .slice(-5)  // last 5 only
+    .map(e => `${e.model_name}: EvalScore=${e.eval_score}, Trust=${e.trust_score}, Verdict=${e.meta_verdict}`)
+    .join('\n')
+
+  return `${selected}\n\nRecent evaluations (brief):\n${history}`
+}
+A-2  |  LIME Averages Only 10 Samples — Statistically Noisy  [MEDIUM]
+ProblemYour LIME implementation averages feature importance across only 10 random samples. LIME is inherently stochastic — running it on 10 samples produces high-variance, unstable results. Different runs on the same model could give noticeably different feature rankings.ImpactFeature importance charts from LIME are not reliable enough to call 'research-grade'. Reproducibility is poor.Fix AIncrease to minimum 50–100 samples for LIME averaging.Fix B (Better)Set random_state in LIME for reproducibility, and increase num_features and num_samples parameters.
+Fix — Increase LIME Sample Count and Add Seed
+from lime.lime_tabular import LimeTabularExplainer
+
+explainer = LimeTabularExplainer(
+    X_train.values,
+    feature_names=feature_names,
+    mode='classification',
+    random_state=42  # reproducibility
+)
+
+# Sample 50 instances instead of 10
+sample_indices = np.random.RandomState(42).choice(len(X_test), size=50, replace=False)
+importances = []
+for idx in sample_indices:
+    exp = explainer.explain_instance(
+        X_test[idx], model.predict_proba,
+        num_features=len(feature_names),
+        num_samples=1000  # LIME internal perturbations
+    )
+    importances.append(dict(exp.as_list()))
+
+# Average across all 50 samples
+avg_importance = pd.DataFrame(importances).abs().mean().sort_values(ascending=False)
+
+
+05  Quick Wins & Low-Hanging Fruit
+Easy fixes with good impact — implement these first
+U-1  |  No Evaluation Result Caching  [LOW]
+ProblemEvery time a user evaluates the same (model, dataset) pair, the full 37-step pipeline runs again. The evaluations table already supports upsert, but there's no check-before-run logic.ImpactRepeated work. Slower UX. Higher compute cost.FixBefore running the pipeline, query for existing evaluation. Add a force_rerun=false parameter to allow the user to override the cache when needed.
+Fix — Cache Check with Optional Override
+@router.post('/evaluate')
+async def evaluate(req: EvalRequest, force_rerun: bool = False, db=Depends(get_db)):
+    if not force_rerun:
+        existing = await db.find_evaluation(req.model_id, req.dataset_id)
+        if existing:
+            return existing  # instant response
+    # Otherwise run full pipeline
+    return await run_full_pipeline(req)
+06  Improvement Opportunities
+Not bugs — but things that would meaningfully elevate the project
+I-1  |  Add Evaluation Versioning
+Currently there's no way to diff two evaluations of the same model. Adding an evaluation_config JSONB column (storing sensitive_attribute, mode, dataset_hash) would enable reproducibility and proper version comparison — a real research-grade feature.
+
+Schema Addition
+-- Add to evaluations table
+ALTER TABLE evaluations ADD COLUMN evaluation_config JSONB;
+-- Store: {sensitive_attribute, mode, dataset_row_count, dataset_hash, pipeline_version}
+I-2  |  Add Bootstrap Confidence Intervals to the UI
+The MetaEvaluator already has evaluate_multi_run() for bootstrap confidence intervals. These are not shown in the UI. Displaying 95% CI on the Trust Score (e.g., '82.3 ± 4.1') would be a genuine research differentiator and impress examiners significantly.
+
+I-3  |  Evaluation Progress Streaming
+Once the async pipeline (B-1 fix) is in place, stream real-time step progress to the frontend via Server-Sent Events (SSE) or WebSocket. Show 'Step 12/37: Computing fairness metrics...' in the UI. This turns a black-box wait into an engaging demo experience.
+
+# FastAPI SSE streaming
+from fastapi.responses import StreamingResponse
+
+async def stream_progress(job_id: str):
+    async def event_generator():
+        while True:
+            status = await get_job_status(job_id)
+            yield f'data: {json.dumps(status)}\n\n'
+            if status['completed']: break
+            await asyncio.sleep(0.5)
+    return StreamingResponse(event_generator(), media_type='text/event-stream')
+I-4  |  Dataset Version Tracking
+Currently datasets have no hash or checksum. If a user uploads the same CSV twice (or a modified version), there's no way to detect it. Add a SHA-256 hash column to the datasets table. This prevents accidental duplicate uploads and enables cache invalidation when data changes.
+
+import hashlib
+
+def compute_dataset_hash(file_path: str) -> str:
+    sha256 = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+# Check for existing dataset with same hash before saving
+
+
+07  Fix Priority Roadmap
+Recommended order of implementation before FYP submission
+Phase 1 — Before Demo (Fix These First)
+These will cause visible failures during a demo or viva examination. Address them immediately.
+
+#Issue IDWhat to FixEffort1B-1Add BackgroundTasks to evaluation endpoint2–3 hours2B-2Cap SHAP KernelExplainer with shap.kmeans()1 hour3M-1Exclude F from Trust Score when not evaluated1 hour4M-2Auto 80/20 split for robustness computation2 hours5A-1Trim AI chat context to selected eval only1 hour
+Phase 2 — Before Submission (Strengthen the Methodology)
+These improve the academic rigor. Address before final write-up.
+
+#Issue IDWhat to FixEffort6M-3Normalize MAE/RMSE by std(y) for scale invariance1 hour7M-4Apply weighted DII (0.35M + 0.30I + 0.20D + 0.15S)1 hour8B-3Add row-cap sampling for large dataset safety2 hours9A-2Increase LIME to 50 samples with random_state=4230 min10S-1Move toward httpOnly cookie token storage3–4 hours
+Phase 3 — Nice to Have (Polish)
+Improvements and features that add polish, academic depth, or future-proofing. Do these if time permits.
+
+• B-4: Add cache-check in /compare endpoint to skip re-running evaluated models
+• U-1: Add force_rerun=false query parameter to evaluation endpoint
+• I-1: Add evaluation_config JSONB column for versioning and reproducibility
+• I-2: Surface Bootstrap Confidence Intervals in the Trust Overview panel
+• I-3: Add SSE progress streaming once async pipeline is in place
+• I-4: Add SHA-256 dataset hash to prevent duplicate uploads
+• M-5: Integrate BERTScore as a third NLP metric alongside BLEU and ROUGE
+
+
+End of Report
+EvalModel  —  FYP Audit Document  |  March 2026
+EvalModel — Efficiency & Improvement Report   |   Page 1   |   Confidential — FYP Internal Document
+

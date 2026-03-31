@@ -9,21 +9,36 @@ This module computes the Fairness score (F) for the trust framework:
     F = 1 - DP
 
 where DP (Demographic Parity difference) is:
-    DP = |PPR_group0 - PPR_group1|
+    DP = max(PPR_across_groups) - min(PPR_across_groups)
 
-Mathematical Guarantees:
-------------------------
-- DP ∈ [0, 1] (clipped)
-- F ∈ [0, 1] (clipped)
-- All group metrics are properly bounded
+Multi-Group Support:
+--------------------
+Unlike binary fairness metrics, this implementation supports ANY number of groups:
+- 2 groups (binary: male/female)
+- 3+ groups (multiclass: race, age_group, etc.)
+
+The fairness metrics are computed as the worst-case gap across all groups.
+
+Auto-Detection:
+---------------
+When no sensitive attribute is specified, the engine auto-detects potential
+sensitive columns based on:
+1. Column name keywords (gender, race, age, etc.)
+2. Low cardinality categorical columns (2-10 unique values)
+3. Numeric columns with few unique values (likely encoded groups)
 
 Supported Fairness Metrics:
 ---------------------------
+Classification:
 - Demographic Parity (Statistical Parity)
-- Equal Opportunity  
-- Disparate Impact Ratio
-- Equalized Odds
-- Predictive Parity
+- Equal Opportunity (TPR equality)
+- Equalized Odds (TPR + FPR equality)
+- Disparate Impact Ratio (80% rule)
+- Predictive Parity (Precision equality)
+
+Regression:
+- Demographic Parity (prediction distribution)
+- Error Parity (MAE consistency across groups)
 
 References:
 -----------
@@ -40,6 +55,64 @@ logger = logging.getLogger(__name__)
 
 # Numerical stability constant
 EPSILON = 1e-12
+
+# Keywords for auto-detecting sensitive attributes
+SENSITIVE_KEYWORDS = [
+    "gender", "sex", "race", "ethnicity", "age", "age_group",
+    "religion", "nationality", "disability", "marital", "income_group",
+    "education", "country", "region", "native", "citizen", "minority",
+    "protected", "demographic", "group"
+]
+
+
+def detect_sensitive_attributes(df: pd.DataFrame, exclude_cols: Optional[List[str]] = None) -> List[str]:
+    """
+    Auto-detect potential sensitive attributes from a dataset.
+    
+    Detection strategy:
+    1. Column name matches sensitive keywords (e.g., "gender", "race")
+    2. Low cardinality categorical columns (2-10 unique values)
+    3. Numeric columns with very few unique values (likely encoded groups)
+    
+    Args:
+        df: DataFrame to analyze
+        exclude_cols: Columns to exclude from detection (e.g., target column)
+    
+    Returns:
+        List of column names that are likely sensitive attributes
+    """
+    exclude_cols = set(exclude_cols or [])
+    detected = []
+    
+    for col in df.columns:
+        if col in exclude_cols:
+            continue
+            
+        col_lower = col.lower()
+        
+        # Strategy 1: Check by column name
+        if any(kw in col_lower for kw in SENSITIVE_KEYWORDS):
+            detected.append(col)
+            logger.info(f"Detected sensitive attribute by name: {col}")
+            continue
+        
+        # Strategy 2: Low cardinality categorical
+        if df[col].dtype == "object" or str(df[col].dtype) == "category":
+            n_unique = df[col].nunique()
+            if 2 <= n_unique <= 10:
+                detected.append(col)
+                logger.info(f"Detected sensitive attribute by cardinality (categorical, {n_unique} groups): {col}")
+            continue
+        
+        # Strategy 3: Numeric with very few unique values (encoded groups)
+        if pd.api.types.is_numeric_dtype(df[col]):
+            n_unique = df[col].nunique()
+            # Only flag as sensitive if it looks like an encoded category
+            if 2 <= n_unique <= 5:
+                detected.append(col)
+                logger.info(f"Detected sensitive attribute by cardinality (numeric, {n_unique} groups): {col}")
+    
+    return detected
 
 
 class FairnessEngine:
@@ -63,7 +136,8 @@ class FairnessEngine:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         sensitive_attr: np.ndarray,
-        model_type: str = 'classification'
+        model_type: str = 'classification',
+        sensitive_attr_name: str = 'sensitive_feature'
     ) -> Dict[str, Any]:
         """
         Perform comprehensive fairness analysis.
@@ -73,42 +147,143 @@ class FairnessEngine:
             y_pred: Predicted labels
             sensitive_attr: Sensitive attribute values (e.g., gender, race)
             model_type: Type of model ('classification' or 'regression')
+            sensitive_attr_name: Name of the sensitive attribute column
         
         Returns:
             Dictionary containing fairness metrics and group-level analysis
         """
         try:
-            if model_type != 'classification':
-                logger.warning("Fairness analysis is currently only supported for classification tasks")
-                return self._empty_result()
-            
             # Get unique groups
             unique_groups = np.unique(sensitive_attr)
             if len(unique_groups) < 2:
                 logger.warning("Need at least 2 groups for fairness analysis")
                 return self._empty_result()
             
-            # Compute group-level metrics
-            group_metrics = self._compute_group_metrics(y_true, y_pred, sensitive_attr, unique_groups)
-            
-            # Compute fairness metrics
-            fairness_metrics = self._compute_fairness_metrics(y_true, y_pred, sensitive_attr, unique_groups)
-            
-            # Compute overall fairness score
-            overall_score = self._compute_overall_fairness_score(fairness_metrics)
-            fairness_metrics['overall_fairness_score'] = overall_score
-            
-            return {
-                'fairness_metrics': fairness_metrics,
-                'group_metrics': group_metrics,
-                'sensitive_attribute': 'sensitive_feature',
-                'num_groups': len(unique_groups),
-                'analysis_successful': True
-            }
+            # Route to appropriate analysis method
+            if model_type == 'regression':
+                return self._analyze_regression_fairness(
+                    y_true, y_pred, sensitive_attr, unique_groups, sensitive_attr_name
+                )
+            else:
+                # Default to classification
+                # Compute group-level metrics
+                group_metrics = self._compute_group_metrics(y_true, y_pred, sensitive_attr, unique_groups)
+                
+                # Compute fairness metrics
+                fairness_metrics = self._compute_fairness_metrics(y_true, y_pred, sensitive_attr, unique_groups)
+                
+                # Compute overall fairness score
+                overall_score = self._compute_overall_fairness_score(fairness_metrics)
+                fairness_metrics['overall_fairness_score'] = overall_score
+                
+                return {
+                    'fairness_metrics': fairness_metrics,
+                    'group_metrics': group_metrics,
+                    'sensitive_attribute': sensitive_attr_name,
+                    'num_groups': len(unique_groups),
+                    'groups': [str(g) for g in unique_groups],
+                    'model_type': model_type,
+                    'analysis_successful': True
+                }
             
         except Exception as e:
             logger.error(f"Error in fairness analysis: {str(e)}")
             return self._empty_result()
+    
+    def _analyze_regression_fairness(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        sensitive_attr: np.ndarray,
+        unique_groups: np.ndarray,
+        sensitive_attr_name: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze fairness for regression models.
+        
+        Metrics:
+        - Demographic Parity: Difference in mean predictions across groups
+        - Error Parity: Difference in MAE across groups
+        """
+        group_metrics = []
+        group_stats = {}
+        
+        for group in unique_groups:
+            mask = sensitive_attr == group
+            y_true_g = y_true[mask]
+            y_pred_g = y_pred[mask]
+            
+            if len(y_true_g) == 0:
+                continue
+            
+            mean_pred = float(np.mean(y_pred_g))
+            mean_true = float(np.mean(y_true_g))
+            mae = float(np.mean(np.abs(y_true_g - y_pred_g)))
+            rmse = float(np.sqrt(np.mean((y_true_g - y_pred_g) ** 2)))
+            
+            group_stats[group] = {
+                'mean_pred': mean_pred,
+                'mae': mae
+            }
+            
+            group_metrics.append({
+                'group': str(group),
+                'sample_count': int(len(y_true_g)),
+                'mean_prediction': mean_pred,
+                'mean_actual': mean_true,
+                'mae': mae,
+                'rmse': rmse
+            })
+        
+        # Compute worst-case gaps across all group pairs
+        max_pred_gap = 0.0
+        max_mae_gap = 0.0
+        
+        groups_list = list(group_stats.keys())
+        for i, g1 in enumerate(groups_list):
+            for g2 in groups_list[i+1:]:
+                stats1 = group_stats[g1]
+                stats2 = group_stats[g2]
+                
+                # Demographic Parity for regression: gap in mean predictions
+                pred_gap = abs(stats1['mean_pred'] - stats2['mean_pred'])
+                max_pred_gap = max(max_pred_gap, pred_gap)
+                
+                # Error Parity: gap in MAE
+                mae_gap = abs(stats1['mae'] - stats2['mae'])
+                max_mae_gap = max(max_mae_gap, mae_gap)
+        
+        # Normalize demographic parity by prediction range
+        all_preds = np.concatenate([y_pred[sensitive_attr == g] for g in groups_list])
+        pred_range = np.ptp(all_preds) if len(all_preds) > 0 else 1.0
+        normalized_dp = min(1.0, max_pred_gap / max(pred_range, 1e-10))
+        
+        # Normalize error parity by mean MAE
+        mean_mae = np.mean([group_stats[g]['mae'] for g in groups_list])
+        normalized_error_parity = min(1.0, max_mae_gap / max(mean_mae, 1e-10))
+        
+        # Fairness score F = 1 - normalized_dp (analogous to classification)
+        fairness_score_F = max(0.0, 1.0 - normalized_dp)
+        
+        fairness_metrics = {
+            'demographic_parity_difference': float(normalized_dp),
+            'fairness_score_F': float(fairness_score_F),
+            'error_parity_difference': float(normalized_error_parity),
+            'max_prediction_gap': float(max_pred_gap),
+            'max_mae_gap': float(max_mae_gap),
+            'overall_fairness_score': float((fairness_score_F + (1 - normalized_error_parity)) / 2),
+            'num_groups_analyzed': len(group_stats)
+        }
+        
+        return {
+            'fairness_metrics': fairness_metrics,
+            'group_metrics': group_metrics,
+            'sensitive_attribute': sensitive_attr_name,
+            'num_groups': len(unique_groups),
+            'groups': [str(g) for g in unique_groups],
+            'model_type': 'regression',
+            'analysis_successful': True
+        }
     
     def _compute_group_metrics(
         self,
@@ -179,74 +354,104 @@ class FairnessEngine:
         sensitive_attr: np.ndarray,
         unique_groups: np.ndarray
     ) -> Dict[str, float]:
-        """Compute various fairness metrics."""
+        """
+        Compute various fairness metrics using multi-group approach.
         
-        # For simplicity, compare first two groups (can be extended)
+        For multi-group fairness, we compute metrics for ALL group pairs and
+        report the worst-case (maximum gap) across all pairs. This ensures
+        fairness is measured across ALL demographic groups, not just two.
+        """
         if len(unique_groups) < 2:
             return {}
         
-        group_0 = unique_groups[0]
-        group_1 = unique_groups[1]
+        # Compute per-group statistics
+        group_stats = {}
+        for group in unique_groups:
+            mask = sensitive_attr == group
+            y_true_g = y_true[mask]
+            y_pred_g = y_pred[mask]
+            
+            if len(y_pred_g) == 0:
+                continue
+            
+            # Positive prediction rate (for demographic parity)
+            ppr = np.mean(y_pred_g)
+            
+            # True positive rate (for equal opportunity)
+            pos_mask = y_true_g == 1
+            tpr = np.mean(y_pred_g[pos_mask]) if np.sum(pos_mask) > 0 else 0
+            
+            # False positive rate (for equalized odds)
+            neg_mask = y_true_g == 0
+            fpr = np.mean(y_pred_g[neg_mask]) if np.sum(neg_mask) > 0 else 0
+            
+            # Precision (for predictive parity)
+            prec = precision_score(y_true_g, y_pred_g, zero_division=0)
+            
+            group_stats[group] = {
+                'ppr': ppr,
+                'tpr': tpr,
+                'fpr': fpr,
+                'precision': prec
+            }
         
-        # Get predictions and labels for each group
-        mask_0 = sensitive_attr == group_0
-        mask_1 = sensitive_attr == group_1
+        if len(group_stats) < 2:
+            return {}
         
-        y_true_0, y_pred_0 = y_true[mask_0], y_pred[mask_0]
-        y_true_1, y_pred_1 = y_true[mask_1], y_pred[mask_1]
+        # Compute worst-case gaps across ALL group pairs
+        max_dp_diff = 0.0
+        max_eo_diff = 0.0
+        max_eq_odds_diff = 0.0
+        max_pp_diff = 0.0
+        min_disparate_impact = 1.0
         
-        # Demographic Parity (Statistical Parity)
-        # DP = |PPR_group0 - PPR_group1|, clipped to [0, 1]
-        ppr_0 = np.mean(y_pred_0) if len(y_pred_0) > 0 else 0
-        ppr_1 = np.mean(y_pred_1) if len(y_pred_1) > 0 else 0
-        demographic_parity_diff = min(1.0, max(0.0, abs(ppr_0 - ppr_1)))  # Clip to [0,1]
-        statistical_parity = 1 - demographic_parity_diff  # Convert to score (higher is better)
+        groups_list = list(group_stats.keys())
+        for i, g1 in enumerate(groups_list):
+            for g2 in groups_list[i+1:]:
+                stats1 = group_stats[g1]
+                stats2 = group_stats[g2]
+                
+                # Demographic Parity difference
+                dp_diff = abs(stats1['ppr'] - stats2['ppr'])
+                max_dp_diff = max(max_dp_diff, dp_diff)
+                
+                # Equal Opportunity difference (TPR gap)
+                eo_diff = abs(stats1['tpr'] - stats2['tpr'])
+                max_eo_diff = max(max_eo_diff, eo_diff)
+                
+                # Equalized Odds difference (max of TPR and FPR gaps)
+                fpr_diff = abs(stats1['fpr'] - stats2['fpr'])
+                eq_odds = max(eo_diff, fpr_diff)
+                max_eq_odds_diff = max(max_eq_odds_diff, eq_odds)
+                
+                # Predictive Parity difference
+                pp_diff = abs(stats1['precision'] - stats2['precision'])
+                max_pp_diff = max(max_pp_diff, pp_diff)
+                
+                # Disparate Impact (min ratio across pairs)
+                if stats1['ppr'] > 0 and stats2['ppr'] > 0:
+                    ratio = min(stats1['ppr'] / stats2['ppr'], stats2['ppr'] / stats1['ppr'])
+                    min_disparate_impact = min(min_disparate_impact, ratio)
         
-        # Validate DP is in range (assertion for mathematical integrity)
-        assert 0.0 <= demographic_parity_diff <= 1.0, \
-            f"Demographic parity difference out of range [0,1]: {demographic_parity_diff}"
-        
-        # Disparate Impact Ratio
-        disparate_impact = (ppr_1 / ppr_0) if ppr_0 > 0 else 1.0
-        
-        # Equal Opportunity (True Positive Rate equality)
-        pos_mask_0 = y_true_0 == 1
-        pos_mask_1 = y_true_1 == 1
-        
-        tpr_0 = np.mean(y_pred_0[pos_mask_0]) if np.sum(pos_mask_0) > 0 else 0
-        tpr_1 = np.mean(y_pred_1[pos_mask_1]) if np.sum(pos_mask_1) > 0 else 0
-        equal_opportunity_diff = abs(tpr_0 - tpr_1)
-        
-        # Equalized Odds (TPR and FPR equality)
-        neg_mask_0 = y_true_0 == 0
-        neg_mask_1 = y_true_1 == 0
-        
-        fpr_0 = np.mean(y_pred_0[neg_mask_0]) if np.sum(neg_mask_0) > 0 else 0
-        fpr_1 = np.mean(y_pred_1[neg_mask_1]) if np.sum(neg_mask_1) > 0 else 0
-        
-        equalized_odds_diff = max(abs(tpr_0 - tpr_1), abs(fpr_0 - fpr_1))
-        
-        # Predictive Parity (Precision equality)
-        precision_0 = precision_score(y_true_0, y_pred_0, zero_division=0)
-        precision_1 = precision_score(y_true_1, y_pred_1, zero_division=0)
-        predictive_parity = 1 - abs(precision_0 - precision_1)
+        # Clip values to [0, 1]
+        demographic_parity_diff = min(1.0, max(0.0, max_dp_diff))
+        equal_opportunity_diff = min(1.0, max(0.0, max_eo_diff))
+        equalized_odds_diff = min(1.0, max(0.0, max_eq_odds_diff))
+        predictive_parity = max(0.0, 1 - max_pp_diff)
+        statistical_parity = max(0.0, 1 - demographic_parity_diff)
         
         # F score for Hybrid Trust Framework: F = 1 - DP
-        # Both DP and F are clipped to [0, 1] for mathematical integrity
         fairness_score_F = min(1.0, max(0.0, 1.0 - demographic_parity_diff))
-        
-        # Validate F is in range (assertion for mathematical integrity)
-        assert 0.0 <= fairness_score_F <= 1.0, \
-            f"Fairness score F out of range [0,1]: {fairness_score_F}"
         
         return {
             'demographic_parity_difference': float(demographic_parity_diff),
             'fairness_score_F': float(fairness_score_F),  # Trust framework F score
             'equal_opportunity_difference': float(equal_opportunity_diff),
-            'disparate_impact_ratio': float(disparate_impact),
+            'disparate_impact_ratio': float(min_disparate_impact),
             'statistical_parity': float(statistical_parity),
             'predictive_parity': float(predictive_parity),
-            'equalized_odds_difference': float(equalized_odds_diff)
+            'equalized_odds_difference': float(equalized_odds_diff),
+            'num_groups_analyzed': len(group_stats)
         }
     
     def _compute_overall_fairness_score(self, fairness_metrics: Dict[str, float]) -> float:
@@ -331,6 +536,86 @@ class FairnessEngine:
             )
         
         return recommendations
+
+
+def run_fairness_analysis(
+    df: pd.DataFrame,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    sensitive_attribute: Optional[str] = None,
+    target_column: Optional[str] = None,
+    model_type: str = 'classification'
+) -> Dict[str, Any]:
+    """
+    Run fairness analysis with optional auto-detection of sensitive attributes.
+    
+    This is the main entry point for fairness analysis. It will:
+    1. Auto-detect sensitive attributes if none provided
+    2. Run fairness analysis for each detected attribute
+    3. Return combined results
+    
+    Args:
+        df: DataFrame containing the dataset (for auto-detection)
+        y_true: Ground truth labels
+        y_pred: Predicted labels
+        sensitive_attribute: Optional specific attribute to analyze
+        target_column: Target column name to exclude from detection
+        model_type: 'classification' or 'regression'
+    
+    Returns:
+        Dictionary with analysis results for each sensitive attribute
+    """
+    results = {
+        'analyses': [],
+        'detected_attributes': [],
+        'overall_fairness_score': 1.0,
+        'analysis_successful': False
+    }
+    
+    # Determine which sensitive attributes to analyze
+    if sensitive_attribute and sensitive_attribute in df.columns:
+        attrs_to_analyze = [sensitive_attribute]
+        results['detected_attributes'] = [sensitive_attribute]
+        logger.info(f"Using provided sensitive attribute: {sensitive_attribute}")
+    else:
+        # Auto-detect sensitive attributes
+        exclude_cols = [target_column] if target_column else []
+        attrs_to_analyze = detect_sensitive_attributes(df, exclude_cols)
+        results['detected_attributes'] = attrs_to_analyze
+        logger.info(f"Auto-detected {len(attrs_to_analyze)} sensitive attributes: {attrs_to_analyze}")
+    
+    if not attrs_to_analyze:
+        logger.warning("No sensitive attributes found or provided for fairness analysis")
+        return results
+    
+    # Run analysis for each sensitive attribute
+    min_fairness_score = 1.0
+    for attr in attrs_to_analyze:
+        if attr not in df.columns:
+            logger.warning(f"Sensitive attribute '{attr}' not found in dataset")
+            continue
+        
+        sensitive_values = df[attr].values
+        analysis = fairness_engine.analyze_fairness(
+            y_true=y_true,
+            y_pred=y_pred,
+            sensitive_attr=sensitive_values,
+            model_type=model_type,
+            sensitive_attr_name=attr
+        )
+        
+        results['analyses'].append(analysis)
+        
+        # Track minimum fairness score across all attributes
+        if analysis.get('analysis_successful'):
+            fairness_score = analysis.get('fairness_metrics', {}).get('fairness_score_F', 1.0)
+            min_fairness_score = min(min_fairness_score, fairness_score)
+    
+    # Overall fairness is the worst case across all sensitive attributes
+    results['overall_fairness_score'] = min_fairness_score
+    results['analysis_successful'] = len(results['analyses']) > 0
+    
+    return results
 
 
 # Global instance

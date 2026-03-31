@@ -23,31 +23,32 @@ export const useDashboardData = () => {
     error: null,
   });
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (signal?: AbortSignal) => {
     try {
       setData(prev => ({ ...prev, isLoading: true, error: null }));
 
       // Get auth token from localStorage
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
       }
 
       // Fetch all data in parallel
+      // Use the same default params as other pages (limit=100) so requests share the cache
       const [modelsResponse, datasetsResponse, evaluationsResponse] = await Promise.all([
-        apiClient.listModels(1000, 0), // Get all models
+        apiClient.listModels(),
         apiClient.listDatasets(),
-        apiClient.getEvaluationHistory(1000), // Get all evaluations for metrics
+        apiClient.getEvaluationHistory(),
       ]);
+
+      // Ignore result if this fetch was superseded (e.g. StrictMode double-mount)
+      if (signal?.aborted) return;
 
       const models: Model[] = modelsResponse.models || [];
       const datasets: Dataset[] = datasetsResponse.datasets || [];
       const allEvaluations: Evaluation[] = evaluationsResponse.evaluations || [];
 
-      // Calculate metrics
       const metrics = calculateMetrics(models, datasets, allEvaluations);
-
-      // Get recent evaluations (last 10)
       const recentEvaluations = allEvaluations.slice(0, 10);
 
       setData({
@@ -58,6 +59,7 @@ export const useDashboardData = () => {
       });
 
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
       console.error('Error fetching dashboard data:', error);
       setData(prev => ({
         ...prev,
@@ -68,7 +70,9 @@ export const useDashboardData = () => {
   };
 
   useEffect(() => {
-    fetchDashboardData();
+    const controller = new AbortController();
+    fetchDashboardData(controller.signal);
+    return () => controller.abort();
   }, []);
 
   return {
@@ -163,11 +167,11 @@ export function getPrimaryMetric(evaluation: Evaluation): { name: string; value:
   if (metrics.accuracy !== undefined) {
     return { name: 'Accuracy', value: `${(metrics.accuracy * 100).toFixed(1)}%` };
   }
-  if (metrics.f1 !== undefined) {
-    return { name: 'F1 Score', value: `${(metrics.f1 * 100).toFixed(1)}%` };
+  if (metrics.f1_score !== undefined) {
+    return { name: 'F1 Score', value: `${(metrics.f1_score * 100).toFixed(1)}%` };
   }
-  if (metrics.r2 !== undefined) {
-    return { name: 'R² Score', value: metrics.r2.toFixed(3) };
+  if (metrics.r2_score !== undefined) {
+    return { name: 'R² Score', value: metrics.r2_score.toFixed(3) };
   }
   if (metrics.precision !== undefined) {
     return { name: 'Precision', value: `${(metrics.precision * 100).toFixed(1)}%` };

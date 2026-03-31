@@ -88,6 +88,9 @@ class DatasetMetadata(BaseModel):
     description: Optional[str] = None
     file_path: str
     file_size: int
+    file_size_bytes: Optional[int] = None
+    file_hash: Optional[str] = None
+    fingerprint: Optional[Dict[str, Any]] = None
     row_count: Optional[int] = None
     column_count: Optional[int] = None
     uploaded_at: datetime
@@ -100,6 +103,8 @@ class EvaluationRequest(BaseModel):
     dataset_id: str
     # Optional explicit sensitive attribute column name. If provided, it will be used when present in the dataset.
     sensitive_attribute: Optional[str] = None
+    # Force re-run even if a cached evaluation exists
+    force_rerun: bool = False
     
 class MetricsResult(BaseModel):
     # Classification
@@ -156,6 +161,22 @@ class EvaluationResult(BaseModel):
     fairness_metrics: Optional[Dict[str, Any]] = None
     group_metrics: Optional[List[Dict[str, Any]]] = None
     sensitive_attribute: Optional[str] = None
+    # Research transparency fields (not stored in DB, computed on the fly)
+    trust_mode: Optional[str] = Field(None, description="Current trust mode: balanced or strict")
+    lambda_value: Optional[float] = Field(None, description="Lambda (DII-based auto/user weight balance)")
+    lambda_raw: Optional[float] = Field(None, description="Raw lambda before capping")
+    lambda_cap: Optional[float] = Field(None, description="Lambda cap value")
+    dii_components: Optional[Dict[str, float]] = Field(None, description="DII sub-components (imbalance, missing, duplicates, skew)")
+    beta_auto: Optional[Dict[str, float]] = Field(None, description="Automatic risk-proportional weights")
+    guard_threshold: Optional[float] = Field(None, description="Non-compensatory guard threshold τ")
+    guard_triggered: Optional[bool] = Field(None, description="Whether non-compensatory guard was triggered")
+    guard_failures: Optional[List[Dict[str, Any]]] = Field(None, description="Components that triggered guard")
+    trust_score_raw: Optional[float] = Field(None, description="Trust score before global penalty")
+    global_penalty_applied: Optional[bool] = Field(None, description="Whether strict global penalty was applied")
+    instability_penalty_value: Optional[float] = Field(None, description="Instability penalty value applied")
+    breakdown: Optional[Dict[str, float]] = Field(None, description="Per-component contribution to trust score")
+    # Strict mode comparison data
+    strict_result: Optional[Dict[str, Any]] = Field(None, description="Full strict mode evaluation for comparison")
     
     model_config = BASE_MODEL_CONFIG
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { apiClient } from '@/lib/api-client';
 
 interface AuthResponse {
@@ -32,10 +32,15 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const didFetchRef = useRef(false); // Guard against StrictMode double-fetch
 
   useEffect(() => {
+    // Prevent duplicate fetch in StrictMode
+    if (didFetchRef.current) return;
+    didFetchRef.current = true;
+
     // Check for stored token on mount
-    const token = localStorage.getItem('access_token');
+    const token = sessionStorage.getItem('access_token');
     
     if (token) {
       apiClient.setToken(token);
@@ -48,8 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .catch((error) => {
           // Token invalid, clear everything
           console.log('Token validation failed:', error.message);
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
+          sessionStorage.removeItem('access_token');
+          sessionStorage.removeItem('refresh_token');
           apiClient.setToken(null);
           setUser(null);
         })
@@ -65,9 +70,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const response = await apiClient.signup(email, password, username) as AuthResponse;
       
-      // Store tokens
-      localStorage.setItem('access_token', response.access_token);
-      localStorage.setItem('refresh_token', response.refresh_token);
+      // Store tokens in sessionStorage (cleared on browser close for XSS protection)
+      sessionStorage.setItem('access_token', response.access_token);
+      sessionStorage.setItem('refresh_token', response.refresh_token);
       
       // Set API client token
       apiClient.setToken(response.access_token);
@@ -84,9 +89,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const response = await apiClient.login(email, password) as AuthResponse;
       
-      // Store tokens
-      localStorage.setItem('access_token', response.access_token);
-      localStorage.setItem('refresh_token', response.refresh_token);
+      // Store tokens in sessionStorage (cleared on browser close for XSS protection)
+      sessionStorage.setItem('access_token', response.access_token);
+      sessionStorage.setItem('refresh_token', response.refresh_token);
       
       // Set API client token
       apiClient.setToken(response.access_token);
@@ -106,8 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Logout error:', error);
     } finally {
       // Always clear tokens and user
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
+      sessionStorage.removeItem('access_token');
+      sessionStorage.removeItem('refresh_token');
       apiClient.setToken(null);
       setUser(null);
     }

@@ -22,6 +22,11 @@ class ExplainabilityEngine:
     - Force plot data
     - Decision plot data
     """
+
+    # SHAP performance caps — prevent KernelExplainer from hanging on large datasets
+    SHAP_BACKGROUND_SIZE = 50    # kmeans clusters for KernelExplainer background
+    SHAP_EXPLAIN_SIZE    = 200   # max test samples to explain
+    SHAP_KERNEL_NSAMPLES = 100   # KernelExplainer internal perturbations per sample
     
     def __init__(self):
         self.shap_available = False
@@ -80,9 +85,11 @@ class ExplainabilityEngine:
         }
         
         try:
-            # Limit samples for performance
+            # Limit samples for performance — cap test set to 200 rows max
+            # to prevent KernelExplainer timeouts on large datasets
+            shap_max = min(max_samples, 200)
             X_train_sample = X_train[:min(max_samples, len(X_train))]
-            X_test_sample = X_test[:min(max_samples, len(X_test))]
+            X_test_sample = X_test[:min(shap_max, len(X_test))]
             
             # Try SHAP first (more comprehensive)
             if self.shap_available:
@@ -130,23 +137,84 @@ class ExplainabilityEngine:
         """Generate SHAP explanations."""
         try:
             # Choose appropriate explainer
-            explainer = self._get_shap_explainer(model, X_train, model_type)
+            explainer = self._get_shap_explainer(model, X_train, feature_names, model_type)
             
             if explainer is None:
                 return None
             
-            # Calculate SHAP values
-            shap_values = explainer.shap_values(X_test)
+            explainer_type = type(explainer).__name__
+            logger.debug(f"Using SHAP explainer: {explainer_type}")
             
-            # Handle different SHAP value formats
-            if isinstance(shap_values, list):
-                # For classification with multiple classes, use first class or average
-                if model_type == "classification":
-                    shap_values_array = np.array(shap_values[0]) if len(shap_values) > 0 else np.array(shap_values)
-                else:
-                    shap_values_array = np.array(shap_values[0])
+            # Calculate SHAP values using appropriate API for each explainer type
+            # SHAP 0.40+ uses callable explainer for TreeExplainer (returns Explanation object)
+            # KernelExplainer still uses .shap_values() method
+            if isinstance(explainer, self.shap.KernelExplainer):
+                shap_values = explainer.shap_values(X_test, nsamples=self.SHAP_KERNEL_NSAMPLES)
+            elif isinstance(explainer, self.shap.TreeExplainer):
+                # Use new API: call explainer directly to get Explanation object
+                try:
+                    explanation = explainer(X_test, check_additivity=False)
+                    shap_values = explanation  # Explanation object with .values attribute
+                except Exception as e:
+                    logger.debug(f"New TreeExplainer API failed: {e}, trying legacy shap_values()")
+                    shap_values = explainer.shap_values(X_test)
             else:
-                shap_values_array = np.array(shap_values)
+                # LinearExplainer or other - try new API first, fallback to old
+                try:
+                    explanation = explainer(X_test)
+                    shap_values = explanation
+                except Exception:
+                    shap_values = explainer.shap_values(X_test)
+            
+            # Debug logging to understand SHAP output format
+            logger.debug(f"SHAP values type: {type(shap_values)}, hasattr values: {hasattr(shap_values, 'values')}")
+            if isinstance(shap_values, list):
+                logger.debug(f"SHAP values is list of length {len(shap_values)}, first element type: {type(shap_values[0]) if shap_values else 'N/A'}")
+            elif hasattr(shap_values, 'shape'):
+                logger.debug(f"SHAP values shape: {shap_values.shape}")
+            
+            # Handle different SHAP value formats (supports both old and new SHAP API)
+            # New SHAP (0.40+) may return Explanation objects; old versions return arrays/lists
+            try:
+                if hasattr(shap_values, 'values'):
+                    # New SHAP Explanation object
+                    shap_values_array = np.asarray(shap_values.values)
+                    # For multi-class, take first class or average
+                    if len(shap_values_array.shape) == 3:
+                        shap_values_array = shap_values_array[:, :, 0]  # First class
+                elif isinstance(shap_values, list) and len(shap_values) > 0:
+                    # Old API: list of arrays for each class
+                    first_val = shap_values[0]
+                    # Handle case where first element is also nested or scalar
+                    if isinstance(first_val, np.ndarray):
+                        shap_values_array = np.asarray(first_val)
+                    else:
+                        # Might be a single value or nested structure
+                        shap_values_array = np.asarray(shap_values)
+                        if shap_values_array.ndim == 0:
+                            # 0-d array, expand to 2D
+                            shap_values_array = shap_values_array.reshape(1, 1)
+                else:
+                    shap_values_array = np.asarray(shap_values)
+                    
+                # Handle 0-d arrays (scalars wrapped in numpy)
+                if shap_values_array.ndim == 0:
+                    shap_values_array = shap_values_array.reshape(1, 1)
+            except (IndexError, TypeError) as e:
+                logger.warning(f"Error parsing SHAP values format: {e}, trying fallback")
+                # Fallback: try to convert whatever we have
+                shap_values_array = np.atleast_2d(np.asarray(shap_values))
+            
+            # Ensure 2D array (samples x features)
+            if len(shap_values_array.shape) == 1:
+                shap_values_array = shap_values_array.reshape(1, -1)
+            
+            # Validate shape matches feature count
+            if shap_values_array.shape[1] != len(feature_names):
+                logger.warning(f"SHAP values shape {shap_values_array.shape} doesn't match feature count {len(feature_names)}")
+                # Try to truncate or pad if close
+                if shap_values_array.shape[1] > len(feature_names):
+                    shap_values_array = shap_values_array[:, :len(feature_names)]
             
             # Calculate feature importance (mean absolute SHAP values)
             feature_importance = np.abs(shap_values_array).mean(axis=0)
@@ -166,12 +234,36 @@ class ExplainabilityEngine:
             
             # Calculate SHAP summary statistics
             base_value = None
-            if hasattr(explainer, 'expected_value'):
+            # Try to get base_value from Explanation object first (new API)
+            if hasattr(shap_values, 'base_values'):
+                bv = shap_values.base_values
+                try:
+                    if isinstance(bv, np.ndarray):
+                        if bv.ndim == 0:
+                            base_value = float(bv)
+                        elif bv.size > 0:
+                            base_value = float(bv.flat[0])
+                    elif isinstance(bv, (int, float, np.number)):
+                        base_value = float(bv)
+                except (IndexError, TypeError, ValueError) as e:
+                    logger.debug(f"Could not extract base_value from Explanation.base_values: {e}")
+            
+            # Fallback: try explainer.expected_value (old API)
+            if base_value is None and hasattr(explainer, 'expected_value'):
                 ev = explainer.expected_value
-                if isinstance(ev, (list, np.ndarray)):
-                    base_value = float(ev[0]) if len(ev) > 0 else None
-                elif isinstance(ev, (int, float, np.number)):
-                    base_value = float(ev)
+                try:
+                    if isinstance(ev, np.ndarray):
+                        # Handle both 0-d and 1-d+ arrays
+                        if ev.ndim == 0:
+                            base_value = float(ev)
+                        elif ev.size > 0:
+                            base_value = float(ev.flat[0])
+                    elif isinstance(ev, list) and len(ev) > 0:
+                        base_value = float(ev[0])
+                    elif isinstance(ev, (int, float, np.number)):
+                        base_value = float(ev)
+                except (IndexError, TypeError, ValueError) as e:
+                    logger.debug(f"Could not extract base_value from expected_value: {e}")
             
             shap_summary = {
                 "mean_abs_shap": float(np.abs(shap_values_array).mean()),
@@ -183,12 +275,17 @@ class ExplainabilityEngine:
             
             # Store SHAP values for first few samples (for waterfall charts)
             sample_explanations = []
-            for i in range(min(5, len(X_test))):
-                sample_explanations.append({
-                    "sample_index": i,
-                    "shap_values": [float(v) for v in shap_values_array[i]],
-                    "feature_values": [float(v) for v in X_test[i]]
-                })
+            n_samples = min(5, shap_values_array.shape[0], len(X_test))
+            for i in range(n_samples):
+                try:
+                    sample_explanations.append({
+                        "sample_index": i,
+                        "shap_values": [float(v) for v in shap_values_array[i]],
+                        "feature_values": [float(v) for v in X_test[i]]
+                    })
+                except (IndexError, ValueError) as e:
+                    logger.debug(f"Could not extract sample explanation {i}: {e}")
+                    break
             
             return {
                 "feature_importance": importance_list,
@@ -198,45 +295,53 @@ class ExplainabilityEngine:
             }
             
         except Exception as e:
-            logger.error(f"SHAP explanation failed: {e}")
+            import traceback
+            logger.error(f"SHAP explanation failed: {e}\n{traceback.format_exc()}")
             return None
     
-    def _get_shap_explainer(self, model: Any, X_train: np.ndarray, model_type: str):
-        """Get appropriate SHAP explainer for the model."""
+    def _get_shap_explainer(self, model: Any, X_train: np.ndarray, feature_names: List[str], model_type: str):
+        """Get appropriate SHAP explainer for the model.
+        Fallback order: TreeExplainer → LinearExplainer → KernelExplainer (slowest).
+        KernelExplainer always uses kmeans-compressed background + nsamples cap.
+        """
         try:
-            # Try TreeExplainer first (fastest for tree-based models)
+            # Attempt 1: TreeExplainer (fastest — tree-based models)
             try:
                 explainer = self.shap.TreeExplainer(model)
-                # Test explainer to catch pickle errors early
-                _ = explainer.shap_values(X_train[:1])
+                # Smoke test with new API (SHAP 0.40+)
+                _ = explainer(X_train[:1], check_additivity=False)
+                logger.debug("TreeExplainer smoke test passed")
                 return explainer
             except Exception as e:
                 logger.debug(f"TreeExplainer failed: {e}")
-                pass
-            
-            # Try KernelExplainer (model-agnostic, slower)
+
+            # Attempt 2: LinearExplainer (linear models — fast, before Kernel)
             try:
-                if model_type == "classification":
-                    predict_fn = lambda x: model.predict_proba(x)
-                else:
-                    predict_fn = model.predict
-                
-                # Use subset of training data as background
-                background = self.shap.sample(X_train, min(50, len(X_train)))
-                return self.shap.KernelExplainer(predict_fn, background)
-            except Exception as e:
-                logger.debug(f"KernelExplainer failed: {e}")
-                pass
-            
-            # Try LinearExplainer (for linear models)
-            try:
-                return self.shap.LinearExplainer(model, X_train)
+                background = self.shap.maskers.Independent(
+                    X_train, max_samples=self.SHAP_BACKGROUND_SIZE
+                )
+                return self.shap.LinearExplainer(model, background)
             except Exception as e:
                 logger.debug(f"LinearExplainer failed: {e}")
-                pass
-            
+
+            # Attempt 3: KernelExplainer (universal, slowest)
+            # CRITICAL: always compress background with kmeans to cap cost
+            try:
+                # Wrap input in DataFrame to preserve feature names and suppress sklearn warnings
+                def _wrap_predict(x):
+                    x_df = pd.DataFrame(x, columns=feature_names)
+                    if model_type == "classification":
+                        return model.predict_proba(x_df)
+                    return model.predict(x_df)
+
+                k = min(self.SHAP_BACKGROUND_SIZE, len(X_train))
+                background = self.shap.kmeans(X_train, k)
+                return self.shap.KernelExplainer(_wrap_predict, background)
+            except Exception as e:
+                logger.debug(f"KernelExplainer failed: {e}")
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Failed to create SHAP explainer: {e}")
             return None
@@ -251,31 +356,45 @@ class ExplainabilityEngine:
     ) -> Optional[Dict[str, Any]]:
         """Generate LIME explanations."""
         try:
+            # Wrap input in DataFrame to preserve feature names and suppress sklearn warnings
+            def _wrap_predict(x):
+                x_df = pd.DataFrame(x, columns=feature_names)
+                if model_type == "classification":
+                    return model.predict_proba(x_df)
+                return model.predict(x_df)
+
             if model_type == "classification":
                 explainer = self.lime_tabular.LimeTabularExplainer(
                     X_train,
                     feature_names=feature_names,
                     mode='classification',
-                    discretize_continuous=True
+                    discretize_continuous=True,
+                    random_state=42
                 )
-                predict_fn = lambda x: model.predict_proba(x)
             else:
                 explainer = self.lime_tabular.LimeTabularExplainer(
                     X_train,
                     feature_names=feature_names,
-                    mode='regression'
+                    mode='regression',
+                    random_state=42
                 )
-                predict_fn = model.predict
+            predict_fn = _wrap_predict
             
-            # Explain first few samples
+            # Explain samples — use 50 for statistical stability (not 10)
+            # Fixed random_state for reproducibility across runs
+            n_lime_samples = min(50, len(X_test))
+            rng = np.random.RandomState(42)
+            sample_indices = rng.choice(len(X_test), size=n_lime_samples, replace=False) if len(X_test) > n_lime_samples else np.arange(len(X_test))
+            
             lime_explanations = []
             feature_importance_sum = np.zeros(len(feature_names))
             
-            for i in range(min(10, len(X_test))):
+            for i in sample_indices:
                 exp = explainer.explain_instance(
                     X_test[i],
                     predict_fn,
-                    num_features=len(feature_names)
+                    num_features=len(feature_names),
+                    num_samples=1000
                 )
                 
                 # Extract feature importance
@@ -373,15 +492,18 @@ class ExplainabilityEngine:
             if len(sample.shape) == 1:
                 sample = sample.reshape(1, -1)
             
+            # Wrap sample in DataFrame to preserve feature names and suppress sklearn warnings
+            sample_df = pd.DataFrame(sample, columns=feature_names)
+            
             # Get prediction
             if model_type == "classification":
-                prediction = model.predict(sample)[0]
+                prediction = model.predict(sample_df)[0]
                 if hasattr(model, 'predict_proba'):
-                    probabilities = model.predict_proba(sample)[0]
+                    probabilities = model.predict_proba(sample_df)[0]
                 else:
                     probabilities = None
             else:
-                prediction = model.predict(sample)[0]
+                prediction = model.predict(sample_df)[0]
                 probabilities = None
             
             result = {
@@ -394,7 +516,7 @@ class ExplainabilityEngine:
             # Try SHAP explanation
             if self.shap_available:
                 try:
-                    explainer = self._get_shap_explainer(model, X_train, model_type)
+                    explainer = self._get_shap_explainer(model, X_train, feature_names, model_type)
                     if explainer:
                         shap_values = explainer.shap_values(sample)
                         
@@ -440,20 +562,28 @@ class ExplainabilityEngine:
             # Fallback to LIME
             if self.lime_available:
                 try:
+                    # Wrap input in DataFrame to preserve feature names and suppress sklearn warnings
+                    def _wrap_predict(x):
+                        x_df = pd.DataFrame(x, columns=feature_names)
+                        if model_type == "classification":
+                            return model.predict_proba(x_df)
+                        return model.predict(x_df)
+
                     if model_type == "classification":
                         explainer = self.lime_tabular.LimeTabularExplainer(
                             X_train,
                             feature_names=feature_names,
-                            mode='classification'
+                            mode='classification',
+                            random_state=42
                         )
-                        predict_fn = lambda x: model.predict_proba(x)
                     else:
                         explainer = self.lime_tabular.LimeTabularExplainer(
                             X_train,
                             feature_names=feature_names,
-                            mode='regression'
+                            mode='regression',
+                            random_state=42
                         )
-                        predict_fn = model.predict
+                    predict_fn = _wrap_predict
                     
                     exp = explainer.explain_instance(sample[0], predict_fn, num_features=len(feature_names))
                     

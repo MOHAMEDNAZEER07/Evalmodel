@@ -32,9 +32,9 @@ export function useInsightsPageData() {
   useEffect(() => {
     const fetchAllEvaluations = async () => {
       try {
-        const token = localStorage.getItem("access_token");
+        const token = sessionStorage.getItem("access_token");
         if (token) apiClient.setToken(token);
-        const data = await apiClient.getEvaluationHistory(1000);
+        const data = await apiClient.getEvaluationHistory();
         console.log("📊 Loaded all evaluations for AI context:", data.evaluations?.length || 0);
         setAllEvaluations(data.evaluations || []);
       } catch (err) {
@@ -48,7 +48,7 @@ export function useInsightsPageData() {
   useEffect(() => {
     const fetchDatasets = async () => {
       try {
-        const token = localStorage.getItem("access_token");
+        const token = sessionStorage.getItem("access_token");
         if (token) apiClient.setToken(token);
         const response = await apiClient.listDatasets();
         setDatasets(response.datasets || []);
@@ -69,7 +69,7 @@ export function useInsightsPageData() {
     const fetchModels = async () => {
       setLoadingModels(true);
       try {
-        const token = localStorage.getItem("access_token");
+        const token = sessionStorage.getItem("access_token");
         if (token) apiClient.setToken(token);
         const response = await apiClient.listModels();
         setModels(
@@ -113,9 +113,9 @@ export function useInsightsPageData() {
       if (!selectedModelId || !selectedDatasetId) return;
       setLoadingEvaluation(true);
       try {
-        const token = localStorage.getItem("access_token");
+        const token = sessionStorage.getItem("access_token");
         if (token) apiClient.setToken(token);
-        const data = await apiClient.getEvaluationHistory(1000);
+        const data = await apiClient.getEvaluationHistory();
         setAllEvaluations(data.evaluations || []);
 
         // Exact match first, then fallback to most recent for this model

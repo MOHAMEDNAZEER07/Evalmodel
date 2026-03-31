@@ -1,5 +1,6 @@
 /**
  * Builds context strings from evaluation data for the AI chat.
+ * Includes full MetaEvaluator / Hybrid Trust Framework data.
  */
 
 import type { EvaluationData, ModelInfo, DatasetInfo } from "@/types/insights-chat";
@@ -16,9 +17,14 @@ export function buildAllEvaluationsContext(
     return "\nNo evaluation history available yet.\n";
   }
 
-  let evalContext = `\n===== ALL EVALUATION HISTORY (${allEvaluations.length} evaluations) =====\n`;
+  // Limit to last 5 evaluations to keep context concise
+  const MAX_HISTORY = 5;
+  const recentEvals = allEvaluations.slice(0, MAX_HISTORY);
+  const totalCount = allEvaluations.length;
 
-  allEvaluations.forEach((ev, idx) => {
+  let evalContext = `\n===== EVALUATION HISTORY (showing ${recentEvals.length} of ${totalCount}) =====\n`;
+
+  recentEvals.forEach((ev, idx) => {
     const model = allModels.find((m) => m.id === ev.model_id);
     const dataset = allDatasets.find((d) => d.id === ev.dataset_id);
 
@@ -27,6 +33,7 @@ export function buildAllEvaluationsContext(
     evalContext += `    EvalScore: ${ev.eval_score?.toFixed(1) || "N/A"}/100\n`;
     evalContext += `    Evaluated: ${ev.evaluated_at ? new Date(ev.evaluated_at).toLocaleDateString() : "N/A"}\n`;
 
+    // Basic metrics
     const m = ev.metrics;
     if (m) {
       evalContext += `    Metrics: `;
@@ -42,7 +49,22 @@ export function buildAllEvaluationsContext(
       evalContext += metrics.length > 0 ? metrics.join(", ") : "No metrics";
       evalContext += "\n";
     }
+
+    // Brief trust summary
+    if (ev.trust_score !== undefined) {
+      evalContext += `    Trust Score: ${ev.trust_score.toFixed(2)}/100\n`;
+    }
+    if (ev.meta_verdict) {
+      const verdictMsg = typeof ev.meta_verdict === 'object'
+        ? (ev.meta_verdict as any).message || (ev.meta_verdict as any).status
+        : ev.meta_verdict;
+      evalContext += `    Verdict: ${verdictMsg}\n`;
+    }
   });
+
+  if (totalCount > MAX_HISTORY) {
+    evalContext += `\n    ... and ${totalCount - MAX_HISTORY} older evaluations\n`;
+  }
 
   evalContext += `===============================================\n`;
   return evalContext;
@@ -64,6 +86,25 @@ interface ModelContextParams {
     rmse?: number;
     r2_score?: number;
   };
+  // Hybrid Trust Framework
+  trustScore?: number;
+  metaScore?: number;
+  dii?: number;
+  componentScores?: Record<string, number>;
+  riskValues?: Record<string, number>;
+  hybridWeights?: Record<string, number>;
+  datasetHealthScore?: number;
+  metaFlags?: string[];
+  metaRecommendations?: Array<{ action: string; why: string; priority: string }>;
+  metaVerdict?: { status: string; message: string; confidence?: number };
+  // Explainability
+  featureImportance?: Array<{ feature: string; importance: number; rank: number }>;
+  explainabilityMethod?: string;
+  shapSummary?: Record<string, any>;
+  // Fairness
+  fairnessMetrics?: Record<string, any>;
+  groupMetrics?: Record<string, any>;
+  sensitiveAttribute?: string;
 }
 
 interface DatasetContextParams {
@@ -91,6 +132,7 @@ export function buildContextMessage(
     if (params.datasetName) context += `Dataset: ${params.datasetName}\n`;
     if (params.evalScore !== undefined) context += `EvalScore: ${params.evalScore.toFixed(1)}/100\n`;
 
+    // Basic performance metrics
     if (params.modelMetrics) {
       const mm = params.modelMetrics;
       context += `Performance Metrics:\n`;
@@ -102,6 +144,92 @@ export function buildContextMessage(
       if (mm.mse !== undefined) context += `  • MSE: ${mm.mse.toFixed(4)}\n`;
       if (mm.rmse !== undefined) context += `  • RMSE: ${mm.rmse.toFixed(4)}\n`;
       if (mm.r2_score !== undefined) context += `  • R² Score: ${mm.r2_score.toFixed(4)}\n`;
+    }
+
+    // Hybrid Trust Framework (MetaEvaluator)
+    if (params.trustScore !== undefined || params.dii !== undefined || params.metaVerdict) {
+      context += `\nHybrid Trust Framework (MetaEvaluator):\n`;
+      if (params.trustScore !== undefined) context += `  • Trust Score: ${params.trustScore.toFixed(2)}/100\n`;
+      if (params.metaScore !== undefined) context += `  • Meta Score: ${params.metaScore.toFixed(2)}\n`;
+      if (params.dii !== undefined) context += `  • DII (Data Instability Index): ${params.dii.toFixed(4)}\n`;
+      if (params.datasetHealthScore !== undefined) context += `  • Dataset Health Score: ${params.datasetHealthScore.toFixed(2)}\n`;
+      if (params.metaVerdict) {
+        const msg = typeof params.metaVerdict === 'object'
+          ? params.metaVerdict.message || params.metaVerdict.status
+          : params.metaVerdict;
+        context += `  • Verdict: ${msg}\n`;
+      }
+    }
+
+    // Component scores (P, H, F, R)
+    if (params.componentScores) {
+      context += `\nComponent Scores:\n`;
+      Object.entries(params.componentScores).forEach(([key, value]) => {
+        context += `  • ${key}: ${typeof value === 'number' ? value.toFixed(3) : value}\n`;
+      });
+    }
+
+    // Risk values
+    if (params.riskValues) {
+      context += `\nRisk Values:\n`;
+      Object.entries(params.riskValues).forEach(([key, value]) => {
+        context += `  • ${key}: ${typeof value === 'number' ? value.toFixed(3) : value}\n`;
+      });
+    }
+
+    // Hybrid weights (λ distribution)
+    if (params.hybridWeights) {
+      context += `\nHybrid Weights (λ):\n`;
+      Object.entries(params.hybridWeights).forEach(([key, value]) => {
+        context += `  • ${key}: ${typeof value === 'number' ? value.toFixed(3) : value}\n`;
+      });
+    }
+
+    // Fairness analysis
+    if (params.sensitiveAttribute || params.fairnessMetrics || params.groupMetrics) {
+      context += `\nFairness Analysis:\n`;
+      if (params.sensitiveAttribute) context += `  • Sensitive Attribute: ${params.sensitiveAttribute}\n`;
+      if (params.fairnessMetrics) {
+        Object.entries(params.fairnessMetrics).forEach(([key, value]) => {
+          context += `  • ${key}: ${typeof value === 'number' ? value.toFixed(4) : JSON.stringify(value)}\n`;
+        });
+      }
+      if (params.groupMetrics) {
+        context += `  • Group Metrics: ${JSON.stringify(params.groupMetrics)}\n`;
+      }
+    }
+
+    // Explainability
+    if (params.explainabilityMethod || params.featureImportance) {
+      context += `\nExplainability:\n`;
+      if (params.explainabilityMethod) context += `  • Method: ${params.explainabilityMethod}\n`;
+      if (params.featureImportance) {
+        const sorted = [...params.featureImportance]
+          .sort((a, b) => b.importance - a.importance)
+          .slice(0, 10);
+        context += `  • Top Feature Importances:\n`;
+        sorted.forEach(fi => {
+          context += `    - ${fi.feature}: ${fi.importance.toFixed(4)}\n`;
+        });
+      }
+      if (params.shapSummary) {
+        context += `  • SHAP Summary: ${JSON.stringify(params.shapSummary)}\n`;
+      }
+    }
+
+    // Flags and recommendations
+    if (params.metaFlags && params.metaFlags.length > 0) {
+      context += `\nFlags/Warnings:\n`;
+      params.metaFlags.forEach(flag => {
+        context += `  ⚠ ${flag}\n`;
+      });
+    }
+    if (params.metaRecommendations && params.metaRecommendations.length > 0) {
+      context += `\nRecommendations:\n`;
+      params.metaRecommendations.forEach(rec => {
+        const text = typeof rec === 'object' ? `[${rec.priority}] ${rec.action}` : String(rec);
+        context += `  → ${text}\n`;
+      });
     }
 
     context += allEvalsContext;

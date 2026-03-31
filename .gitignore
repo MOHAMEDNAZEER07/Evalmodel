@@ -82,6 +82,7 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
+.vite/
 
 # Coverage reports
 htmlcov/

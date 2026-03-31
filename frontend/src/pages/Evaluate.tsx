@@ -1,15 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Target, TrendingUp, Activity, BarChart3, Database, Brain, Loader2, Sparkles } from "lucide-react";
-import MetricCard from "@/components/MetricCard";
-import { MetaEvaluatorResults } from "@/components/MetaEvaluatorResults";
-import { ExplainabilityDashboard } from "@/components/ExplainabilityDashboard";
+import { Database, Brain, Loader2, Activity, FileDown, GitCompare, RotateCcw } from "lucide-react";
+import { TrustOverviewPanel } from "@/components/evaluation/TrustOverviewPanel";
+import { ComponentBreakdownPanel } from "@/components/evaluation/ComponentBreakdownPanel";
+import { CalculationTransparencyPanel } from "@/components/evaluation/CalculationTransparencyPanel";
+import { ModeComparisonPanel } from "@/components/evaluation/ModeComparisonPanel";
+import { GuardActivationAlert } from "@/components/evaluation/GuardActivationAlert";
+import { AdvancedAnalyticsPanel } from "@/components/evaluation/AdvancedAnalyticsPanel";
 import { apiClient } from "@/lib/api-client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useEvaluationJob } from "@/hooks/useEvaluationJob";
 
 interface Model {
   id: string;
@@ -52,8 +55,13 @@ interface ListDatasetsResponse {
 }
 
 interface EvaluationResult {
+  cache_hit?: boolean;
+  cache_message?: string;
+  cached?: boolean;
   meta_score?: number;
   trust_score?: number;
+  trust_score_raw?: number;
+  trust_mode?: string;
   DII?: number;
   component_scores?: {
     performance: number;
@@ -66,6 +74,7 @@ interface EvaluationResult {
     health: number;
     fairness: number;
     robustness: number;
+    [key: string]: any;
   };
   hybrid_weights?: {
     performance: number;
@@ -75,7 +84,7 @@ interface EvaluationResult {
   };
   dataset_health_score?: number;
   meta_flags?: string[];
-  meta_recommendations?: { action: string; why: string; priority: string; }[];
+  meta_recommendations?: { action: string; why: string; priority: string }[];
   meta_verdict?: {
     status: string;
     message: string;
@@ -124,6 +133,19 @@ interface EvaluationResult {
     sample_count: number;
   }>;
   sensitive_attribute?: string;
+  // Transparency fields (research-grade)
+  lambda_value?: number;
+  lambda_raw?: number;
+  lambda_cap?: number;
+  dii_components?: Record<string, number>;
+  beta_auto?: { performance: number; health: number; fairness: number; robustness: number };
+  guard_threshold?: number;
+  guard_triggered?: boolean;
+  guard_failures?: Array<{ component: string; score: number }>;
+  global_penalty_applied?: boolean;
+  instability_penalty_value?: number;
+  breakdown?: Record<string, number>;
+  strict_result?: Record<string, any>;
 }
 
 const Evaluate = () => {
@@ -132,14 +154,40 @@ const Evaluate = () => {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedDataset, setSelectedDataset] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isEvaluating, setIsEvaluating] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
   const [datasetColumns, setDatasetColumns] = useState<string[]>([]);
   const [sensitiveAttribute, setSensitiveAttribute] = useState<string>('auto');
+  const reportRef = useRef<HTMLDivElement>(null);
+  
+  // Async evaluation hook for non-blocking evaluation with progress tracking
+  const { job, startEvaluation, isEvaluating, reset: resetJob } = useEvaluationJob();
   
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Derived display names for report header
+  const selectedModelName = models.find(m => m.id === selectedModel)?.name;
+  const selectedDatasetName = datasets.find(d => d.id === selectedDataset)?.name;
+
+  const handleDownloadReport = () => {
+    if (!reportRef.current) return;
+    // Use the browser's native print dialog targeting the report section
+    const printContents = reportRef.current.innerHTML;
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(`<!DOCTYPE html>
+<html><head><title>Evaluation Report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 2rem; color: #1e293b; max-width: 1000px; margin: 0 auto; }
+  * { box-sizing: border-box; }
+  .print\\:hidden { display: none !important; }
+</style>
+<link rel="stylesheet" href="${window.location.origin}/src/index.css" />
+</head><body>${printContents}</body></html>`);
+    win.document.close();
+    setTimeout(() => { win.print(); win.close(); }, 500);
+  };
 
   useEffect(() => {
     if (user) {
@@ -189,7 +237,7 @@ const Evaluate = () => {
   const loadData = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
       }
@@ -223,31 +271,76 @@ const Evaluate = () => {
     }
 
     try {
-      setIsEvaluating(true);
-  // Send the sensitive attribute only when the user picked a specific column.
-  const sensitiveToSend = sensitiveAttribute && sensitiveAttribute !== 'auto' ? sensitiveAttribute : undefined;
-  const result = (await apiClient.evaluateModel(selectedModel, selectedDataset, sensitiveToSend)) as EvaluationResult;
+      // Reset previous results
+      setShowResults(false);
+      setEvaluationResult(null);
       
-      setEvaluationResult(result);
-      setShowResults(true);
+      // Send the sensitive attribute only when the user picked a specific column.
+      const sensitiveToSend = sensitiveAttribute && sensitiveAttribute !== 'auto' ? sensitiveAttribute : undefined;
       
-      toast({
-        title: "Evaluation complete",
-        description: `Meta Score: ${result.meta_score?.toFixed(1) || 'N/A'}/100`,
+      // Start async evaluation — returns immediately with job_id
+      await startEvaluation({
+        model_id: selectedModel,
+        dataset_id: selectedDataset,
+        sensitive_attribute: sensitiveToSend,
       });
       
-      console.log('Evaluation result:', result);
     } catch (error) {
       console.error('Evaluation error:', error);
       toast({
         title: "Evaluation failed",
-        description: error instanceof Error ? error.message : "Failed to evaluate model",
+        description: error instanceof Error ? error.message : "Failed to start evaluation",
         variant: "destructive",
       });
-    } finally {
-      setIsEvaluating(false);
     }
   };
+
+  const handleForceFreshEvaluation = async () => {
+    if (!selectedModel || !selectedDataset) return;
+
+    try {
+      setShowResults(false);
+      setEvaluationResult(null);
+
+      const sensitiveToSend = sensitiveAttribute && sensitiveAttribute !== 'auto' ? sensitiveAttribute : undefined;
+      await startEvaluation({
+        model_id: selectedModel,
+        dataset_id: selectedDataset,
+        sensitive_attribute: sensitiveToSend,
+        force_rerun: true,
+      });
+    } catch (error) {
+      console.error('Force fresh evaluation error:', error);
+      toast({
+        title: 'Fresh evaluation failed',
+        description: error instanceof Error ? error.message : 'Failed to start fresh evaluation',
+        variant: 'destructive',
+      });
+    }
+  };
+  
+  // Watch for job completion and update results
+  useEffect(() => {
+    if (job.status === "completed" && job.result) {
+      setEvaluationResult(job.result as EvaluationResult);
+      setShowResults(true);
+      
+      toast({
+        title: "Evaluation complete",
+        description: `Trust Score: ${(job.result as EvaluationResult).trust_score?.toFixed(1) || 'N/A'}/100`,
+      });
+      
+
+    }
+    
+    if (job.status === "failed" && job.error) {
+      toast({
+        title: "Evaluation failed",
+        description: job.error,
+        variant: "destructive",
+      });
+    }
+  }, [job.status, job.result, job.error, toast]);
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B';
@@ -417,218 +510,229 @@ const Evaluate = () => {
           )}
         </Card>
 
-        {/* Progress */}
+        {/* Progress Bar — Real-time async progress */}
         {isEvaluating && (
           <Card className="glass-card p-8 mb-8 animate-fade-in">
-            <div className="text-center">
-              <div className="inline-block p-4 bg-primary/10 rounded-full mb-4 animate-glow-pulse">
-                <Activity className="h-8 w-8 text-primary animate-spin" />
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-primary/10 rounded-full animate-glow-pulse">
+                  <Activity className="h-6 w-6 text-primary animate-spin" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold">Evaluating Model...</h3>
+                  <p className="text-sm text-muted-foreground">{job.step || "Starting evaluation"}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-bold text-primary">{job.progress}%</span>
+                </div>
               </div>
-              <h3 className="text-lg font-semibold mb-2">Evaluating Model...</h3>
-              <p className="text-muted-foreground">This may take a few moments</p>
+              
+              {/* Progress bar */}
+              <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-primary to-accent h-full rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${job.progress}%` }}
+                />
+              </div>
+              
+              {/* Step breakdown */}
+              <div className="grid grid-cols-6 gap-1 text-xs text-muted-foreground">
+                <div className={`text-center ${job.progress >= 15 ? 'text-primary font-medium' : ''}`}>
+                  Model
+                </div>
+                <div className={`text-center ${job.progress >= 30 ? 'text-primary font-medium' : ''}`}>
+                  SMCP
+                </div>
+                <div className={`text-center ${job.progress >= 55 ? 'text-primary font-medium' : ''}`}>
+                  Dataset
+                </div>
+                <div className={`text-center ${job.progress >= 70 ? 'text-primary font-medium' : ''}`}>
+                  Fairness
+                </div>
+                <div className={`text-center ${job.progress >= 85 ? 'text-primary font-medium' : ''}`}>
+                  Trust
+                </div>
+                <div className={`text-center ${job.progress >= 93 ? 'text-primary font-medium' : ''}`}>
+                  SHAP
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
+        
+        {/* Error state */}
+        {job.status === "failed" && job.error && (
+          <Card className="glass-card p-6 mb-8 border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20">
+            <div className="flex items-start gap-4">
+              <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-full">
+                <RotateCcw className="h-5 w-5 text-red-600 dark:text-red-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-red-700 dark:text-red-400">Evaluation Failed</h3>
+                <p className="text-sm text-red-600 dark:text-red-300 mt-1">{job.error}</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={resetJob}>
+                Try Again
+              </Button>
             </div>
           </Card>
         )}
 
-        {/* Results */}
+        {/* Results — Research-Grade Dashboard */}
         {showResults && evaluationResult && (
-          <div className="animate-fade-in">
+          <div className="animate-fade-in" ref={reportRef}>
+            {/* Section Header */}
             <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-              <h2 className="text-2xl font-bold">Evaluation Results</h2>
-              <div className="flex items-center gap-3">
-                {evaluationResult.explainability_method && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                    <Brain className="h-4 w-4 text-blue-500" />
-                    <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                      {evaluationResult.explainability_method === 'SHAP' && 'SHAP Analysis'}
-                      {evaluationResult.explainability_method === 'LIME' && 'LIME Analysis'}
-                      {evaluationResult.explainability_method === 'basic' && 'Feature Importance'}
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  Evaluation Report
+                </h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  {selectedModelName && selectedDatasetName
+                    ? `${selectedModelName} on ${selectedDatasetName}`
+                    : "Model evaluation results"}
+                  {evaluationResult.trust_mode && (
+                    <span className="ml-2 text-xs font-mono bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
+                      mode: {evaluationResult.trust_mode}
                     </span>
-                  </div>
-                )}
-                {evaluationResult.meta_score !== null && evaluationResult.meta_score !== undefined && (
-                  <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg">
-                    <Sparkles className="h-5 w-5 text-primary" />
-                    <span className="text-sm font-medium">
-                      Meta Score: <span className="text-primary text-lg font-bold">{evaluationResult.meta_score.toFixed(1)}</span>/100
-                    </span>
-                  </div>
-                )}
+                  )}
+                </p>
               </div>
             </div>
 
-            <Tabs 
-              defaultValue={
-                evaluationResult.meta_score ? "meta" : 
-                evaluationResult.feature_importance ? "explainability" : 
-                "metrics"
-              } 
-              className="w-full"
-            >
-              <TabsList className="grid w-full max-w-2xl grid-cols-3 mb-6">
-                <TabsTrigger value="meta" disabled={!evaluationResult.meta_score}>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Meta Evaluator
-                  {!evaluationResult.meta_score && (
-                    <span className="ml-2 text-xs">(Not Available)</span>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="explainability" disabled={!evaluationResult.feature_importance}>
-                  <Brain className="h-4 w-4 mr-2" />
-                  Explainability
-                  {!evaluationResult.feature_importance && (
-                    <span className="ml-2 text-xs">(Not Available)</span>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="metrics">
-                  <BarChart3 className="h-4 w-4 mr-2" />
-                  Standard Metrics
-                </TabsTrigger>
-              </TabsList>
-
-              {/* Meta Evaluator Tab */}
-              <TabsContent value="meta" className="space-y-6">
-                {evaluationResult.meta_score ? (
-                  <MetaEvaluatorResults
-                    metaScore={evaluationResult.meta_score}
-                    trustScore={evaluationResult.trust_score}
-                    DII={evaluationResult.DII}
-                    componentScores={evaluationResult.component_scores}
-                    riskValues={evaluationResult.risk_values}
-                    hybridWeights={evaluationResult.hybrid_weights}
-                    datasetHealthScore={evaluationResult.dataset_health_score || 0}
-                    flags={evaluationResult.meta_flags || []}
-                    recommendations={evaluationResult.meta_recommendations || []}
-                    verdict={evaluationResult.meta_verdict || {
-                      status: "unknown",
-                      message: "No verdict available",
-                      confidence: 0,
-                      critical_issues: 0,
-                      total_issues: 0
-                    }}
-                    breakdown={{
-                      metric_contribution: evaluationResult.meta_score * 0.65 || 0,
-                      dataset_contribution: (evaluationResult.dataset_health_score || 0) * 0.25,
-                      complexity_contribution: evaluationResult.meta_score * 0.10 || 0
-                    }}
-                  />
-                ) : (
-                  <Card className="glass-card p-8 text-center">
-                    <div className="max-w-md mx-auto">
-                      <Sparkles className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-                      <h3 className="text-lg font-semibold mb-2">Meta Evaluator Not Available</h3>
-                      <p className="text-muted-foreground text-sm mb-4">
-                        The Meta Evaluator feature requires backend updates. Please ensure:
-                      </p>
-                      <ul className="text-sm text-muted-foreground text-left space-y-2">
-                        <li>✓ Database migration has been run</li>
-                        <li>✓ Backend server has been restarted</li>
-                        <li>✓ Re-run the evaluation after updates</li>
-                      </ul>
-                    </div>
-                  </Card>
-                )}
-              </TabsContent>
-
-              {/* Explainability Tab */}
-              <TabsContent value="explainability" className="space-y-6">
-                <ExplainabilityDashboard
-                  featureImportance={evaluationResult.feature_importance || null}
-                  explainabilityMethod={evaluationResult.explainability_method || null}
-                  shapSummary={evaluationResult.shap_summary || null}
-                />
-              </TabsContent>
-
-              {/* Standard Metrics Tab */}
-              <TabsContent value="metrics" className="space-y-6">
-                {/* Traditional Metrics Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  {evaluationResult.metrics?.accuracy != null && (
-                    <MetricCard 
-                      title="Accuracy" 
-                      value={`${(evaluationResult.metrics.accuracy * 100).toFixed(1)}%`} 
-                      icon={Target} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.precision != null && (
-                    <MetricCard 
-                      title="Precision" 
-                      value={`${(evaluationResult.metrics.precision * 100).toFixed(1)}%`} 
-                      icon={TrendingUp} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.recall != null && (
-                    <MetricCard 
-                      title="Recall" 
-                      value={`${(evaluationResult.metrics.recall * 100).toFixed(1)}%`} 
-                      icon={Activity} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.f1_score != null && (
-                    <MetricCard 
-                      title="F1-Score" 
-                      value={`${(evaluationResult.metrics.f1_score * 100).toFixed(1)}%`} 
-                      icon={BarChart3} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.r2_score != null && (
-                    <MetricCard 
-                      title="R² Score" 
-                      value={evaluationResult.metrics.r2_score.toFixed(4)} 
-                      icon={Target} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.mse != null && (
-                    <MetricCard 
-                      title="MSE" 
-                      value={evaluationResult.metrics.mse.toFixed(4)} 
-                      icon={Activity} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.mae != null && (
-                    <MetricCard 
-                      title="MAE" 
-                      value={evaluationResult.metrics.mae.toFixed(4)} 
-                      icon={TrendingUp} 
-                    />
-                  )}
-                  {evaluationResult.metrics?.rmse != null && (
-                    <MetricCard 
-                      title="RMSE" 
-                      value={evaluationResult.metrics.rmse.toFixed(4)} 
-                      icon={BarChart3} 
-                    />
-                  )}
+            <div className="space-y-6">
+              {(evaluationResult.cache_hit || evaluationResult.cached) && (
+                <div className="flex items-center justify-between gap-3 p-3 rounded border border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+                  <div className="text-sm">
+                    {evaluationResult.cache_message || 'Cached result returned instantly for this model+dataset pair.'}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={handleForceFreshEvaluation}>
+                    Force Fresh Evaluation
+                  </Button>
                 </div>
+              )}
 
-                {/* Eval Score */}
-                {evaluationResult.eval_score != null && (
-                  <Card className="glass-card p-8">
-                    <h3 className="text-xl font-semibold mb-4">SMCP Eval Score</h3>
-                    <div className="flex items-center gap-4">
-                      <div className="text-4xl font-bold text-primary">
-                        {typeof evaluationResult.eval_score === 'object' && evaluationResult.eval_score !== null
-                          ? ((evaluationResult.eval_score as any)?.eval_score?.toFixed(1) ?? 'N/A')
-                          : (typeof evaluationResult.eval_score === 'number' ? evaluationResult.eval_score.toFixed(1) : 'N/A')}
-                      </div>
-                      <div className="text-2xl text-muted-foreground">/100</div>
-                    </div>
-                  </Card>
-                )}
-              </TabsContent>
-            </Tabs>
+              {/* Guard Activation Alert */}
+              {evaluationResult.guard_triggered && (
+                <GuardActivationAlert
+                  guardFailures={evaluationResult.guard_failures || []}
+                  guardThreshold={evaluationResult.guard_threshold || 0.3}
+                  trustMode={evaluationResult.trust_mode || "balanced"}
+                />
+              )}
 
-            {/* Actions */}
-            <div className="flex gap-4 mt-8">
-              <Button className="btn-glow flex-1">Download Report</Button>
-              <Button variant="outline" className="flex-1">Compare Models</Button>
-              <Button 
-                variant="outline" 
+              {/* 1. Trust Overview (Hero) - only show when full trust methodology data is available */}
+              {evaluationResult.trust_score != null && evaluationResult.component_scores && (
+                <TrustOverviewPanel
+                  trustScore={evaluationResult.trust_score}
+                  trustScoreRaw={evaluationResult.trust_score_raw}
+                  DII={evaluationResult.DII ?? 0}
+                  lambdaValue={evaluationResult.lambda_value ?? 0}
+                  guardTriggered={evaluationResult.guard_triggered || false}
+                  guardFailures={evaluationResult.guard_failures || []}
+                  guardThreshold={evaluationResult.guard_threshold || 0.3}
+                  verdict={evaluationResult.meta_verdict}
+                />
+              )}
+
+              {/* 2. Component Breakdown (P, H, F, R) */}
+              {evaluationResult.component_scores && (
+                <ComponentBreakdownPanel
+                  componentScores={evaluationResult.component_scores}
+                  riskValues={evaluationResult.risk_values}
+                  hybridWeights={evaluationResult.hybrid_weights}
+                  breakdown={evaluationResult.breakdown}
+                />
+              )}
+
+              {/* 3. Balanced vs Strict Comparison */}
+              {evaluationResult.strict_result && evaluationResult.trust_score != null && (
+                <ModeComparisonPanel
+                  balanced={{
+                    trustScore: evaluationResult.trust_score,
+                    lambdaValue: evaluationResult.lambda_value ?? 0,
+                    DII: evaluationResult.DII ?? 0,
+                    guardTriggered: evaluationResult.guard_triggered || false,
+                    guardThreshold: evaluationResult.guard_threshold ?? 0.3,
+                    globalPenaltyApplied: evaluationResult.global_penalty_applied,
+                    instabilityPenaltyValue: evaluationResult.instability_penalty_value,
+                    componentScores: evaluationResult.component_scores,
+                    guardFailures: evaluationResult.guard_failures || [],
+                  }}
+                  strict={{
+                    trustScore: evaluationResult.strict_result.trust_score ?? 0,
+                    lambdaValue: evaluationResult.strict_result.lambda_value ?? 0,
+                    DII: evaluationResult.strict_result.DII ?? 0,
+                    guardTriggered: evaluationResult.strict_result.guard_triggered || false,
+                    guardThreshold: evaluationResult.strict_result.guard_threshold ?? 0.4,
+                    globalPenaltyApplied: evaluationResult.strict_result.global_penalty_applied,
+                    instabilityPenaltyValue: evaluationResult.strict_result.instability_penalty_value,
+                    componentScores: evaluationResult.strict_result.component_scores,
+                    guardFailures: evaluationResult.strict_result.guard_failures || [],
+                  }}
+                />
+              )}
+
+              {/* 4. Calculation Transparency - only show when full breakdown data is available */}
+              {evaluationResult.trust_score != null && evaluationResult.component_scores && (
+                <CalculationTransparencyPanel
+                  metrics={evaluationResult.metrics}
+                  DII={evaluationResult.DII ?? 0}
+                  diiComponents={evaluationResult.dii_components}
+                  componentScores={evaluationResult.component_scores}
+                  riskValues={evaluationResult.risk_values}
+                  lambdaValue={evaluationResult.lambda_value ?? 0}
+                  lambdaRaw={evaluationResult.lambda_raw}
+                  lambdaCap={evaluationResult.lambda_cap}
+                  betaAuto={evaluationResult.beta_auto}
+                  hybridWeights={evaluationResult.hybrid_weights}
+                  trustScore={evaluationResult.trust_score ?? 0}
+                  trustScoreRaw={evaluationResult.trust_score_raw}
+                  guardThreshold={evaluationResult.guard_threshold}
+                  guardTriggered={evaluationResult.guard_triggered}
+                  guardFailures={evaluationResult.guard_failures}
+                  trustMode={evaluationResult.trust_mode || "balanced"}
+                  fairnessMetrics={evaluationResult.fairness_metrics}
+                  globalPenaltyApplied={evaluationResult.global_penalty_applied}
+                  instabilityPenaltyValue={evaluationResult.instability_penalty_value}
+                />
+              )}
+
+              {/* 5. Advanced Analytics (Standard Metrics, Fairness, Feature Importance) */}
+              <AdvancedAnalyticsPanel
+                metrics={evaluationResult.metrics}
+                evalScore={evaluationResult.eval_score}
+                fairnessMetrics={evaluationResult.fairness_metrics}
+                groupMetrics={evaluationResult.group_metrics}
+                sensitiveAttribute={evaluationResult.sensitive_attribute}
+                featureImportance={evaluationResult.feature_importance}
+                explainabilityMethod={evaluationResult.explainability_method}
+                shapSummary={evaluationResult.shap_summary}
+              />
+            </div>
+
+            {/* Actions Bar */}
+            <div className="flex gap-4 mt-8 print:hidden">
+              <Button
+                className="flex-1"
+                variant="outline"
+                onClick={handleDownloadReport}
+              >
+                <FileDown className="mr-2 h-4 w-4" />
+                Download Report
+              </Button>
+              <Button variant="outline" className="flex-1">
+                <GitCompare className="mr-2 h-4 w-4" />
+                Compare Models
+              </Button>
+              <Button
+                variant="outline"
                 onClick={() => {
                   setShowResults(false);
                   setEvaluationResult(null);
                 }}
               >
+                <RotateCcw className="mr-2 h-4 w-4" />
                 New Evaluation
               </Button>
             </div>

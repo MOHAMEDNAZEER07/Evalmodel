@@ -45,7 +45,7 @@ const Explainability = () => {
   const loadEvaluations = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         apiClient.setToken(token);
         const response = await apiClient.getEvaluationHistory(100);

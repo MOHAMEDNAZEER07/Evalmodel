@@ -161,6 +161,22 @@ const Insights = () => {
                 modelFramework={models.find((m) => m.id === selectedModelId)?.framework}
                 evalScore={modelEvaluation?.eval_score}
                 modelMetrics={modelEvaluation?.metrics}
+                trustScore={modelEvaluation?.trust_score}
+                metaScore={modelEvaluation?.meta_score}
+                dii={modelEvaluation?.DII}
+                componentScores={modelEvaluation?.component_scores}
+                riskValues={modelEvaluation?.risk_values}
+                hybridWeights={modelEvaluation?.hybrid_weights}
+                datasetHealthScore={modelEvaluation?.dataset_health_score}
+                metaFlags={modelEvaluation?.meta_flags}
+                metaRecommendations={modelEvaluation?.meta_recommendations}
+                metaVerdict={modelEvaluation?.meta_verdict}
+                featureImportance={modelEvaluation?.feature_importance}
+                explainabilityMethod={modelEvaluation?.explainability_method}
+                shapSummary={modelEvaluation?.shap_summary}
+                fairnessMetrics={modelEvaluation?.fairness_metrics}
+                groupMetrics={modelEvaluation?.group_metrics}
+                sensitiveAttribute={modelEvaluation?.sensitive_attribute}
                 allEvaluations={allEvaluations}
                 allModels={models}
                 allDatasets={datasets}

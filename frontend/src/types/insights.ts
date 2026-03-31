@@ -29,6 +29,25 @@ export interface Evaluation {
   };
   eval_score: number;
   evaluated_at: string;
+  // Hybrid Trust Framework (MetaEvaluator)
+  meta_score?: number;
+  trust_score?: number;
+  DII?: number;
+  component_scores?: Record<string, number>;
+  risk_values?: Record<string, number>;
+  hybrid_weights?: Record<string, number>;
+  dataset_health_score?: number;
+  meta_flags?: string[];
+  meta_recommendations?: Array<{ action: string; why: string; priority: string }>;
+  meta_verdict?: { status: string; message: string; confidence?: number };
+  // Explainability
+  feature_importance?: Array<{ feature: string; importance: number; rank: number }>;
+  explainability_method?: string;
+  shap_summary?: Record<string, any>;
+  // Fairness
+  fairness_metrics?: Record<string, any>;
+  group_metrics?: Record<string, any>;
+  sensitive_attribute?: string;
 }
 
 export interface DataQualityMetrics {

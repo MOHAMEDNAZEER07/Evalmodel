@@ -2,6 +2,7 @@
 Evaluation Routes - SMCP Pipeline with Meta Evaluator and Explainability
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import JSONResponse
 from typing import List
 import os
 import tempfile
@@ -17,9 +18,10 @@ from app.models.schemas import (
 )
 from app.routes.auth import get_current_user
 from app.services.smcp_engine import smcp_engine
-from app.services.meta_evaluator import meta_evaluator
+from app.services.meta_evaluator import meta_evaluator, MetaEvaluator
 from app.services.explainability import explainability_engine
-from app.services.fairness import fairness_engine
+from app.services.fairness import fairness_engine, run_fairness_analysis, detect_sensitive_attributes
+from app.services.evaluation_cache import build_pair_cache_id, is_cache_fresh
 from supabase import Client
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,74 @@ async def evaluate_model(
             raise HTTPException(status_code=404, detail="Dataset not found")
         
         dataset = dataset_result.data
+
+        pair_cache_id = build_pair_cache_id(model, dataset)
+
+        # Check for cached evaluation result (skip if force_rerun)
+        if not getattr(request, 'force_rerun', False):
+            cached_result = supabase.table("evaluations")\
+                .select("*")\
+                .eq("model_id", request.id)\
+                .eq("dataset_id", request.dataset_id)\
+                .eq("user_id", current_user.get("id"))\
+                .execute()
+
+            if cached_result.data:
+                cached = cached_result.data[0]
+                if is_cache_fresh(cached, model, dataset, pair_cache_id):
+                    logger.info(f"Returning cached evaluation for model={request.id}, dataset={request.dataset_id}")
+                    return JSONResponse(
+                        content={
+                            "id": cached["id"],
+                            "model_id": cached["model_id"],
+                            "dataset_id": cached["dataset_id"],
+                            "metrics": cached.get("metrics", {}),
+                            "eval_score": cached.get("eval_score"),
+                            "normalized_metrics": cached.get("normalized_metrics", {}),
+                            "weight_distribution": cached.get("weight_distribution", {}),
+                            # Hybrid Trust Framework scores
+                            "trust_score": cached.get("trust_score"),
+                            "trust_score_raw": cached.get("trust_score_raw"),
+                            "trust_mode": cached.get("trust_mode"),
+                            "meta_score": cached.get("meta_score"),
+                            "DII": cached.get("DII"),
+                            "dii_components": cached.get("dii_components"),
+                            "component_scores": cached.get("component_scores"),
+                            "risk_values": cached.get("risk_values"),
+                            "hybrid_weights": cached.get("hybrid_weights"),
+                            "beta_auto": cached.get("beta_auto"),
+                            "dataset_health_score": cached.get("dataset_health_score"),
+                            # Lambda & Guard System
+                            "lambda_value": cached.get("lambda_value"),
+                            "lambda_raw": cached.get("lambda_raw"),
+                            "lambda_cap": cached.get("lambda_cap"),
+                            "guard_threshold": cached.get("guard_threshold"),
+                            "guard_triggered": cached.get("guard_triggered"),
+                            "guard_failures": cached.get("guard_failures"),
+                            "global_penalty_applied": cached.get("global_penalty_applied"),
+                            "instability_penalty_value": cached.get("instability_penalty_value"),
+                            # Meta Evaluator
+                            "meta_flags": cached.get("meta_flags"),
+                            "meta_recommendations": cached.get("meta_recommendations"),
+                            "meta_verdict": cached.get("meta_verdict"),
+                            # Breakdown for transparency panel
+                            "breakdown": cached.get("breakdown"),
+                            "strict_result": cached.get("strict_result"),
+                            # Explainability
+                            "feature_importance": cached.get("feature_importance"),
+                            "explainability_method": cached.get("explainability_method"),
+                            "shap_summary": cached.get("shap_summary"),
+                            # Fairness
+                            "fairness_metrics": cached.get("fairness_metrics"),
+                            "group_metrics": cached.get("group_metrics"),
+                            "sensitive_attribute": cached.get("sensitive_attribute"),
+                            "evaluated_at": cached.get("evaluated_at"),
+                            "pair_cache_id": pair_cache_id,
+                            "cache_hit": True,
+                            "cache_message": "Returning cached evaluation for identical model+dataset artifacts",
+                            "cached": True
+                        }
+                    )
         
         # Download model and dataset files to temp location
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -90,6 +160,13 @@ async def evaluate_model(
             
             # Load dataset for meta evaluator statistics
             df = pd.read_csv(dataset_path)
+            
+            # Row-cap sampling for large datasets to prevent OOM
+            MAX_EVAL_ROWS = 10_000
+            original_row_count = len(df)
+            if original_row_count > MAX_EVAL_ROWS:
+                df = df.sample(n=MAX_EVAL_ROWS, random_state=42).reset_index(drop=True)
+                logger.info(f"Dataset sampled from {original_row_count} to {MAX_EVAL_ROWS} rows")
             
             # Prepare data splits
             feature_names = [col for col in df.columns if col != df.columns[-1]]
@@ -152,14 +229,15 @@ async def evaluate_model(
                 if len(value_counts) > 0:
                     dataset_stats['imbalance_ratio'] = value_counts.max() / len(df)
             
+            # DEBUG: Log computed dataset_stats for DII
+            logger.info(f"📊 Dataset stats for DII: n_rows={dataset_stats['n_rows']}, n_features={dataset_stats['n_features']}")
+            logger.info(f"📊 DII inputs: missing={dataset_stats['missing_values']}, imbalance_ratio={dataset_stats['imbalance_ratio']:.4f}, duplicate_ratio={dataset_stats['duplicate_ratio']:.4f}, skew={dataset_stats['skew_score']:.4f}")
+            
             # Run Fairness Analysis FIRST (needed for meta evaluator trust score)
+            # Uses enhanced fairness engine with auto-detection and multi-group support
             fairness_result = None
             try:
-                # Production-ready sensitive attribute detection priority:
-                # 1) Use `request.sensitive_attribute` if provided and present in dataset
-                # 2) Use dataset metadata field 'sensitive_attribute' or metadata->sensitive_attribute
-                # 3) Use configured SENSITIVE_ATTRIBUTES list from settings
-                # 4) Conservative fallback: skip fairness analysis
+                # Determine sensitive attribute from explicit request or dataset metadata
                 sensitive_attr_col = None
 
                 # 1) explicit from request
@@ -180,60 +258,114 @@ async def evaluate_model(
                         if metadata and metadata.get('sensitive_attribute') and metadata.get('sensitive_attribute') in df.columns:
                             sensitive_attr_col = metadata.get('sensitive_attribute')
 
-                # 3) configured sensitive attributes list from settings
-                if not sensitive_attr_col:
-                    candidates = []
-                    configured = settings.sensitive_attributes
-                    for col in df.columns:
-                        if str(col).strip().lower() in configured:
-                            candidates.append(col)
-
-                    if len(candidates) == 1:
-                        sensitive_attr_col = candidates[0]
-                    elif len(candidates) > 1:
-                        best = None
-                        best_non_null = -1
-                        for c in candidates:
-                            non_null = int(df[c].notnull().sum())
-                            if non_null > best_non_null:
-                                best_non_null = non_null
-                                best = c
-                        sensitive_attr_col = best
-
-                # 4) Conservative fallback
-                if not sensitive_attr_col:
-                    logger.info("No clear sensitive attribute detected. Skipping fairness analysis.")
-
-                if sensitive_attr_col:
-                    sensitive_attr_test = np.asarray(df[sensitive_attr_col].values[split_idx:])
-                    
-                    fairness_result = fairness_engine.analyze_fairness(
-                        y_true=np.asarray(y_test),
-                        y_pred=y_pred,
-                        sensitive_attr=sensitive_attr_test,
-                        model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression"
-                    )
-                    
-                    if fairness_result.get('analysis_successful'):
-                        fairness_result['sensitive_attribute'] = sensitive_attr_col
-                        logger.info(f"Fairness analysis completed: overall_score={fairness_result['fairness_metrics'].get('overall_fairness_score')}, F_score={fairness_result['fairness_metrics'].get('fairness_score_F')}")
+                # Use enhanced run_fairness_analysis with auto-detection
+                # This will auto-detect sensitive attributes if none provided
+                df_test = df.iloc[split_idx:].copy()  # Test portion of dataframe for fairness
+                model_type_str = "classification" if model_type == ModelType.CLASSIFICATION else "regression"
+                
+                fairness_full_result = run_fairness_analysis(
+                    df=df_test,
+                    y_true=np.asarray(y_test),
+                    y_pred=y_pred,
+                    sensitive_attribute=sensitive_attr_col,  # None triggers auto-detection
+                    target_column=target_col,
+                    model_type=model_type_str
+                )
+                
+                if fairness_full_result.get('analysis_successful'):
+                    # For backward compatibility, extract first analysis as main result
+                    analyses = fairness_full_result.get('analyses', [])
+                    if analyses:
+                        fairness_result = analyses[0]  # Primary analysis
+                        fairness_result['all_analyses'] = analyses  # Include all for transparency
+                        fairness_result['detected_attributes'] = fairness_full_result.get('detected_attributes', [])
+                        logger.info(f"Fairness analysis completed: "
+                                   f"detected_attrs={fairness_result['detected_attributes']}, "
+                                   f"num_groups={fairness_result.get('num_groups')}, "
+                                   f"F_score={fairness_result['fairness_metrics'].get('fairness_score_F'):.4f}")
                     else:
-                        logger.warning("Fairness analysis completed but no results")
+                        logger.warning("Fairness analysis returned no valid analyses")
                         fairness_result = None
+                else:
+                    detected = fairness_full_result.get('detected_attributes', [])
+                    logger.info(f"No sensitive attributes detected for fairness analysis (auto-detected: {detected})")
+                    fairness_result = None
                     
             except Exception as e:
-                logger.warning(f"Fairness analysis failed: {e}")
+                logger.warning(f"Fairness analysis failed: {e}", exc_info=True)
                 fairness_result = None
             
-            # Run Hybrid Trust Meta Evaluator (with fairness results)
-            meta_result = meta_evaluator.evaluate(
+            # Compute train metrics for robustness analysis (auto 80/20 split)
+            train_metrics = None
+            try:
+                y_train_pred = np.asarray(model_obj.predict(X_train))
+                if model_type == ModelType.CLASSIFICATION:
+                    from sklearn.metrics import accuracy_score, f1_score as sk_f1, precision_score, recall_score
+                    train_metrics = {
+                        'accuracy': float(accuracy_score(y_train, y_train_pred)),
+                        'f1_score': float(sk_f1(y_train, y_train_pred, average='weighted', zero_division=0)),
+                        'precision': float(precision_score(y_train, y_train_pred, average='weighted', zero_division=0)),
+                        'recall': float(recall_score(y_train, y_train_pred, average='weighted', zero_division=0)),
+                    }
+                else:
+                    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score as sk_r2
+                    train_metrics = {
+                        'mae': float(mean_absolute_error(y_train, y_train_pred)),
+                        'mse': float(mean_squared_error(y_train, y_train_pred)),
+                        'r2_score': float(sk_r2(y_train, y_train_pred)),
+                    }
+                logger.info(f"Train metrics computed: {train_metrics}")
+            except Exception as e:
+                logger.warning(f"Could not compute train metrics: {e}")
+                train_metrics = None
+            
+            # Run Hybrid Trust Meta Evaluator in BOTH modes for comparison
+            eval_args = dict(
                 metrics=metrics.model_dump(exclude_none=True),
                 dataset_stats=dataset_stats,
                 model_type="classification" if model_type == ModelType.CLASSIFICATION else "regression",
-                train_metrics=None,  # TODO: Pass train metrics if available
+                train_metrics=train_metrics,
                 fairness_result=fairness_result
             )
-            logger.info(f"Hybrid Trust Evaluator: trust_score={meta_result['trust_score']:.2f}, DII={meta_result['DII']:.4f}, P={meta_result['component_scores']['performance']:.4f}, H={meta_result['component_scores']['health']:.4f}, F={meta_result['component_scores']['fairness']:.4f}, R={meta_result['component_scores']['robustness']:.4f}")
+            logger.info(f"🔍 eval_args dataset_stats: {dataset_stats}")
+            
+            # Balanced mode (default)
+            balanced_evaluator = MetaEvaluator(trust_mode="balanced")
+            meta_result = balanced_evaluator.evaluate(**eval_args)
+            
+            # DEBUG: Log dii_components from meta_result
+            logger.info(f"🔍 meta_result dii_components: {meta_result.get('dii_components')}")
+            
+            # Strict mode for comparison
+            strict_evaluator = MetaEvaluator(trust_mode="strict")
+            strict_result = strict_evaluator.evaluate(**eval_args)
+            
+            logger.info(f"Hybrid Trust Evaluator: balanced={meta_result['trust_score']:.2f}, strict={strict_result['trust_score']:.2f}, DII={meta_result['DII']:.4f}")
+            
+            # Check for EvalScore vs TrustScore gap - add warning flag if significant
+            # This helps users understand when Trust Score appears much higher than EvalScore
+            trust_eval_gap = meta_result['trust_score'] - eval_score.eval_score
+            if trust_eval_gap > 10:
+                gap_warning = f"trust_eval_score_gap_{int(trust_eval_gap)}"
+                meta_result['flags'].append(gap_warning)
+                
+                # Build informative gap warning message
+                perf_score = meta_result.get('component_scores', {}).get('performance', 0)
+                raw_metrics = metrics.model_dump(exclude_none=True)
+                mae = raw_metrics.get('mae', 'N/A')
+                rmse = raw_metrics.get('rmse', 'N/A')
+                
+                meta_result['recommendations'].insert(0, {
+                    "action": "Review error magnitudes before production deployment",
+                    "why": f"Trust Score ({meta_result['trust_score']:.1f}) is significantly higher than "
+                           f"EvalScore ({eval_score.eval_score:.1f}). Trust Score is driven by performance metric "
+                           f"(P={perf_score:.2f}) but EvalScore penalizes raw absolute errors. "
+                           f"MAE={mae}, RMSE={rmse}. Verify these error magnitudes are acceptable for your use case.",
+                    "priority": "high",
+                    "component": "performance"
+                })
+                
+                logger.warning(f"⚠️ Trust-Eval gap detected: trust={meta_result['trust_score']:.1f}, eval={eval_score.eval_score:.1f}, gap={trust_eval_gap:.1f}")
             
             # Run Explainability Analysis
             explainability_result = None
@@ -263,14 +395,49 @@ async def evaluate_model(
             # Hybrid Trust Framework scores
             "meta_score": meta_result["meta_score"],  # Legacy compatibility
             "trust_score": meta_result["trust_score"],
+            "trust_score_raw": meta_result.get("trust_score_raw"),
+            "trust_mode": meta_result.get("trust_mode", "balanced"),
             "DII": meta_result["DII"],
+            "dii_components": meta_result.get("dii_components"),
             "component_scores": meta_result["component_scores"],
             "risk_values": meta_result["risk_values"],
             "hybrid_weights": meta_result["hybrid_weights"],
+            "beta_auto": meta_result.get("beta_auto"),
+            "lambda_value": meta_result.get("lambda_value"),
+            "lambda_raw": meta_result.get("lambda_raw"),
+            "lambda_cap": meta_result.get("lambda_cap"),
+            "guard_threshold": meta_result.get("guard_threshold"),
+            "guard_triggered": meta_result.get("non_compensatory_override"),
+            "guard_failures": meta_result.get("non_compensatory_failures"),
+            "global_penalty_applied": meta_result.get("global_penalty_applied"),
+            "instability_penalty_value": meta_result.get("instability_penalty_value"),
+            "breakdown": meta_result.get("breakdown"),
             "dataset_health_score": meta_result["dataset_health_score"],
             "meta_flags": meta_result["flags"],
             "meta_recommendations": meta_result["recommendations"],
             "meta_verdict": meta_result["verdict"],
+            # Strict mode comparison (stored for cached retrieval)
+            "strict_result": {
+                "trust_score": strict_result.get("trust_score"),
+                "trust_score_raw": strict_result.get("trust_score_raw"),
+                "DII": strict_result.get("DII"),
+                "lambda_value": strict_result.get("lambda_value"),
+                "component_scores": strict_result.get("component_scores"),
+                "risk_values": strict_result.get("risk_values"),
+                "hybrid_weights": strict_result.get("hybrid_weights"),
+                "guard_threshold": strict_result.get("guard_threshold"),
+                "guard_triggered": strict_result.get("non_compensatory_override"),
+                "guard_failures": strict_result.get("non_compensatory_failures"),
+                "meta_verdict": strict_result.get("verdict"),
+                "pair_cache_id": pair_cache_id,
+            },
+            "cache_hit": False,
+            "evaluation_config": {
+                "pair_cache_id": pair_cache_id,
+                "dataset_file_hash": dataset.get("file_hash"),
+                "cache_strategy": "artifact-pair",
+                "force_rerun": bool(getattr(request, "force_rerun", False)),
+            },
             # Explainability
             "feature_importance": explainability_result.get("feature_importance") if explainability_result else None,
             "explainability_method": explainability_result.get("method_used") if explainability_result else None,
@@ -300,13 +467,13 @@ async def evaluate_model(
         
         # Update model evaluation status
         supabase.table("models")\
-            .update({"evaluated": True})\
+            .update({"is_evaluated": True})\
             .eq("id", request.id)\
             .execute()
         
         logger.info(f"Model evaluated: {request.id}")
         
-        # Return full evaluation result
+        # Return full evaluation result with research transparency data
         evaluation = result.data[0]
         return EvaluationResult(
             id=evaluation["id"],
@@ -334,7 +501,41 @@ async def evaluate_model(
             # Fairness
             fairness_metrics=evaluation.get("fairness_metrics"),
             group_metrics=evaluation.get("group_metrics"),
-            sensitive_attribute=evaluation.get("sensitive_attribute")
+            sensitive_attribute=evaluation.get("sensitive_attribute"),
+            # Research transparency (from live meta_result, not DB)
+            trust_mode=meta_result.get("trust_mode"),
+            lambda_value=meta_result.get("lambda_value"),
+            lambda_raw=meta_result.get("lambda_raw"),
+            lambda_cap=meta_result.get("lambda_cap"),
+            dii_components=meta_result.get("dii_components"),
+            beta_auto=meta_result.get("beta_auto"),
+            guard_threshold=meta_result.get("guard_threshold"),
+            guard_triggered=meta_result.get("non_compensatory_override"),
+            guard_failures=meta_result.get("non_compensatory_failures"),
+            trust_score_raw=meta_result.get("trust_score_raw"),
+            global_penalty_applied=meta_result.get("global_penalty_applied"),
+            instability_penalty_value=meta_result.get("instability_penalty_value"),
+            breakdown=meta_result.get("breakdown"),
+            # Strict mode comparison
+            strict_result={
+                "trust_score": strict_result.get("trust_score"),
+                "trust_score_raw": strict_result.get("trust_score_raw"),
+                "DII": strict_result.get("DII"),
+                "lambda_value": strict_result.get("lambda_value"),
+                "lambda_raw": strict_result.get("lambda_raw"),
+                "component_scores": strict_result.get("component_scores"),
+                "risk_values": strict_result.get("risk_values"),
+                "hybrid_weights": strict_result.get("hybrid_weights"),
+                "guard_threshold": strict_result.get("guard_threshold"),
+                "guard_triggered": strict_result.get("non_compensatory_override"),
+                "guard_failures": strict_result.get("non_compensatory_failures"),
+                "global_penalty_applied": strict_result.get("global_penalty_applied"),
+                "instability_penalty_value": strict_result.get("instability_penalty_value"),
+                "breakdown": strict_result.get("breakdown"),
+                "dii_components": strict_result.get("dii_components"),
+                "beta_auto": strict_result.get("beta_auto"),
+                "meta_verdict": strict_result.get("verdict"),
+            }
         )
     
     except HTTPException:
@@ -474,3 +675,148 @@ async def get_evaluation_history(
     except Exception as e:
         logger.error(f"Error fetching evaluation history: {e}")
         raise HTTPException(status_code=500, detail="Error fetching history")
+
+
+# =============================================================================
+# ASYNC EVALUATION ENDPOINTS
+# =============================================================================
+# These endpoints provide non-blocking evaluation with progress tracking.
+# Use POST /evaluate/async to start, then poll GET /evaluate/status/{job_id}
+# =============================================================================
+
+from app.services.evaluation_job_service import evaluation_job_service
+from pydantic import BaseModel, ConfigDict
+from typing import Optional
+
+
+class AsyncEvaluationRequest(BaseModel):
+    """Request for async evaluation."""
+    model_config = ConfigDict(protected_namespaces=())
+    
+    model_id: str
+    dataset_id: str
+    sensitive_attribute: Optional[str] = None
+    force_rerun: bool = False
+
+
+class AsyncEvaluationResponse(BaseModel):
+    """Response from async evaluation start."""
+    job_id: str
+    status: str
+
+
+class JobStatusResponse(BaseModel):
+    """Response from job status check."""
+    id: str
+    status: str
+    progress: int
+    step: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@router.post("/evaluate/async", response_model=AsyncEvaluationResponse)
+async def evaluate_model_async(
+    request: AsyncEvaluationRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Start an async evaluation job and return immediately.
+    
+    Returns a job_id that can be used to poll for progress via GET /evaluate/status/{job_id}
+    
+    Benefits:
+    - Non-blocking: Returns in <100ms
+    - Progress tracking: Real-time updates on evaluation stages
+    - No timeouts: Long evaluations won't timeout
+    """
+    try:
+        user_id = current_user.get("id")
+        
+        # Create job record instantly
+        job_id = evaluation_job_service.create_job(
+            user_id=user_id,
+            model_id=request.model_id,
+            dataset_id=request.dataset_id,
+            sensitive_attribute=request.sensitive_attribute
+        )
+        
+        # Fire pipeline in background — non-blocking
+        background_tasks.add_task(
+            evaluation_job_service.run_pipeline,
+            job_id=job_id,
+            user_id=user_id,
+            model_id=request.model_id,
+            dataset_id=request.dataset_id,
+            sensitive_attribute=request.sensitive_attribute,
+            force_rerun=request.force_rerun
+        )
+        
+        logger.info(f"Async evaluation started: job_id={job_id}, model={request.model_id}")
+        
+        # Return immediately
+        return AsyncEvaluationResponse(job_id=job_id, status="pending")
+    
+    except Exception as e:
+        logger.error(f"Failed to start async evaluation: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start evaluation: {str(e)}")
+
+
+@router.get("/evaluate/status/{job_id}")
+async def get_job_status(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get the status of an evaluation job.
+    
+    Poll this endpoint every 1-2 seconds while status is 'pending' or 'running'.
+    
+    Statuses:
+    - pending: Job queued, not yet started
+    - running: Evaluation in progress (check 'progress' and 'step' fields)
+    - completed: Done! The 'result' field contains the full evaluation
+    - failed: Error occurred. Check 'error' field for details
+    """
+    user_id = current_user.get("id")
+    
+    job = evaluation_job_service.get_job_status(job_id, user_id)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return job
+
+
+@router.get("/evaluate/jobs")
+async def list_evaluation_jobs(
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+    limit: int = 20,
+    status: Optional[str] = None
+):
+    """
+    List recent evaluation jobs for the current user.
+    
+    Optionally filter by status (pending, running, completed, failed).
+    """
+    try:
+        query = supabase.table("evaluation_jobs")\
+            .select("id, model_id, dataset_id, status, progress, step, error, created_at, updated_at")\
+            .eq("user_id", current_user.get("id"))\
+            .order("created_at", desc=True)\
+            .limit(limit)
+        
+        if status:
+            query = query.eq("status", status)
+        
+        result = query.execute()
+        
+        return {"jobs": result.data}
+    
+    except Exception as e:
+        logger.error(f"Error listing evaluation jobs: {e}")
+        raise HTTPException(status_code=500, detail="Error listing jobs")

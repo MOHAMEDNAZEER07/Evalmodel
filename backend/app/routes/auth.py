@@ -130,9 +130,14 @@ def decode_token(token: str) -> Dict[str, Any]:
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    supabase: Client = Depends(get_supabase)
 ) -> Dict[str, Any]:
-    """Dependency to get current authenticated user from JWT token"""
+    """Dependency to get current authenticated user from JWT token.
+    Returns minimal dict built from JWT claims — no DB round-trip.
+    The JWT signature already proves identity; a DB lookup every request
+    doubles Supabase traffic for no security benefit.
+    Endpoints that need the full user row (e.g. /me, /change-password)
+    fetch it themselves.
+    """
     try:
         token = credentials.credentials
         payload = decode_token(token)
@@ -151,16 +156,11 @@ async def get_current_user(
                 detail="Invalid token payload"
             )
         
-        # Get user from database
-        result = supabase.table("users").select("*").eq("id", user_id).execute()
-        
-        if not result.data or len(result.data) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
-            )
-        
-        return result.data[0]
+        # Build user dict from token claims — no DB call needed
+        return {
+            "id": user_id,
+            "email": payload.get("email", ""),
+        }
     
     except HTTPException:
         raise
@@ -174,7 +174,6 @@ async def get_current_user(
 
 async def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
-    supabase: Client = Depends(get_supabase)
 ) -> Optional[Dict[str, Any]]:
     """Optional authentication - returns None if not authenticated"""
     if not credentials:
@@ -183,12 +182,9 @@ async def get_current_user_optional(
     try:
         payload = decode_token(credentials.credentials)
         user_id = payload.get("sub")
-        
-        if not user_id:
+        if not user_id or payload.get("type") != "access":
             return None
-        
-        result = supabase.table("users").select("*").eq("id", user_id).execute()
-        return result.data[0] if result.data and len(result.data) > 0 else None
+        return {"id": user_id, "email": payload.get("email", "")}
     except:
         return None
 
@@ -336,16 +332,21 @@ async def logout(
 
 @router.get("/me")
 async def get_current_user_profile(
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
 ):
-    """Get current user profile"""
+    """Get current user profile — fetches full row from DB (only /me needs it)"""
+    result = supabase.table("users").select("*").eq("id", current_user["id"]).execute()
+    if not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    user = result.data[0]
     return {
-        "id": current_user["id"],
-        "email": current_user["email"],
-        "username": current_user.get("username"),
-        "tier": current_user.get("tier", "free"),
-        "model_count": current_user.get("model_count", 0),
-        "created_at": current_user.get("created_at")
+        "id": user["id"],
+        "email": user["email"],
+        "username": user.get("username"),
+        "tier": user.get("tier", "free"),
+        "model_count": user.get("model_count", 0),
+        "created_at": user.get("created_at")
     }
 
 @router.post("/refresh", response_model=AuthResponse)
@@ -449,8 +450,13 @@ async def change_password(
 ):
     """Change user password"""
     try:
+        # Fetch full user row — needed to verify hashed_password
+        result = supabase.table("users").select("*").eq("id", current_user["id"]).execute()
+        if not result.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        db_user = result.data[0]
         # Verify current password
-        if not verify_password(current_password, current_user["hashed_password"]):
+        if not verify_password(current_password, db_user["hashed_password"]):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid current password"
@@ -464,7 +470,7 @@ async def change_password(
             "hashed_password": new_hashed_password
         }).eq("id", current_user["id"]).execute()
         
-        logger.info(f"Password changed for user: {current_user['email']}")
+        logger.info(f"Password changed for user: {current_user['email'] or db_user.get('email')}")
         
         return MessageResponse(message="Password changed successfully")
     
