@@ -2,12 +2,16 @@
 EvalModel FastAPI Backend
 Main application entry point
 """
+from dotenv import load_dotenv
+import os
+
+# Load environment variables FIRST, before any other imports
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
-from dotenv import load_dotenv
-import os
 import logging
 import time
 
@@ -20,9 +24,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -77,7 +78,8 @@ app.include_router(models.router, prefix="/api/models", tags=["Models"])
 app.include_router(datasets.router, prefix="/api/datasets", tags=["Datasets"])
 app.include_router(evaluation.router, prefix="/api/evaluation", tags=["Evaluation"])
 app.include_router(insights.router, prefix="/api/insights", tags=["Insights"])
-app.include_router(test_storage.router, prefix="/api/test", tags=["Testing"])
+if settings.ENABLE_DEBUG_ROUTES:
+    app.include_router(test_storage.router, prefix="/api/test", tags=["Testing"])
 
 # Global exception handler
 @app.exception_handler(Exception)

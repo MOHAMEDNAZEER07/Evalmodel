@@ -7,6 +7,7 @@ from supabase import Client, create_client
 from typing import Optional
 from jose import JWTError, jwt
 import logging
+import os
 
 from app.core.config import settings
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 # JWT Configuration (must match auth.py)
-SECRET_KEY = "your-secret-key-change-this-in-production-use-env-variable"
+SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 ALGORITHM = "HS256"
 
 

@@ -41,6 +41,7 @@ import pickle
 import joblib
 import json
 import os
+from pathlib import Path
 import torch
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
@@ -50,6 +51,28 @@ from app.models.schemas import ModelType, ModelFramework, MetricsResult, EvalSco
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _get_allowed_model_formats() -> set[str]:
+    """Return allowed model file formats from env (default: onnx)."""
+    raw_value = os.getenv("ALLOWED_MODEL_FORMATS", "onnx")
+    return {
+        item.strip().lower().lstrip(".")
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+
+
+def _enforce_allowed_model_format(file_path: str) -> None:
+    """Fail closed for model files not in ALLOWED_MODEL_FORMATS."""
+    extension = Path(file_path).suffix.lower().lstrip(".")
+    allowed_formats = _get_allowed_model_formats()
+
+    if extension not in allowed_formats:
+        raise ValueError(
+            f"Model format '.{extension or 'unknown'}' is blocked. "
+            f"Allowed formats: {', '.join(sorted(allowed_formats)) or 'none'}"
+        )
 
 # Numerical stability constant
 EPSILON = 1e-12
@@ -194,6 +217,8 @@ class SMCPEngine:
     def load_model(self, file_path: str, framework: ModelFramework):
         """Load model based on framework with multiple fallback methods"""
         import os
+        _enforce_allowed_model_format(file_path)
+
         try:
             if framework == ModelFramework.SKLEARN:
                 # Try multiple loading methods for maximum compatibility

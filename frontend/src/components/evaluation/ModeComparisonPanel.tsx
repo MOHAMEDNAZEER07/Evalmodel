@@ -47,11 +47,11 @@ function ModeCard({
     ? "text-blue-700 dark:text-blue-400"
     : "text-red-700 dark:text-red-400";
   const accentBg = accent === "blue"
-    ? "bg-blue-50 dark:bg-blue-950/30"
-    : "bg-red-50 dark:bg-red-950/30";
+    ? "bg-primary/10"
+    : "bg-destructive/10";
 
   return (
-    <Card className={`border-2 ${borderColor} bg-white dark:bg-slate-900 p-6 shadow-sm`}>
+    <Card className={`glass-card border-2 ${borderColor} p-6 shadow-sm`}>
       {/* Mode Label */}
       <div className="flex items-center justify-between mb-4">
         <Badge
@@ -74,32 +74,32 @@ function ModeCard({
         <div className={`text-4xl font-bold tabular-nums ${accentText}`}>
           {(data.trustScore ?? 0).toFixed(2)}
         </div>
-        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">/100</div>
+        <div className="text-xs text-muted-foreground mt-1">/100</div>
       </div>
 
       {/* Key Metrics */}
       <div className="space-y-2 text-sm">
         <div className="flex justify-between">
-          <span className="text-slate-500 dark:text-slate-400">λ (Lambda)</span>
-          <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+          <span className="text-muted-foreground">λ (Lambda)</span>
+          <span className="font-mono font-medium text-foreground/90">
             {(data.lambdaValue ?? 0).toFixed(3)}
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-slate-500 dark:text-slate-400">DII</span>
-          <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+          <span className="text-muted-foreground">DII</span>
+          <span className="font-mono font-medium text-foreground/90">
             {(data.DII ?? 0).toFixed(4)}
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-slate-500 dark:text-slate-400">Guard τ</span>
-          <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+          <span className="text-muted-foreground">Guard τ</span>
+          <span className="font-mono font-medium text-foreground/90">
             {(data.guardThreshold ?? 0.3).toFixed(2)}
           </span>
         </div>
         {data.globalPenaltyApplied && data.instabilityPenaltyValue != null && (
           <div className="flex justify-between">
-            <span className="text-slate-500 dark:text-slate-400">Penalty</span>
+            <span className="text-muted-foreground">Penalty</span>
             <span className="font-mono font-medium text-red-600 dark:text-red-400">
               −{((data.instabilityPenaltyValue ?? 0) * 100).toFixed(2)}%
             </span>
@@ -109,15 +109,15 @@ function ModeCard({
 
       {/* Component Scores */}
       {data.componentScores && (
-        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+        <div className="mt-4 pt-3 border-t border-border/40">
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
             Components
           </div>
           <div className="grid grid-cols-2 gap-1 text-xs">
             {(["performance", "health", "fairness", "robustness"] as const).map((key) => (
               <div key={key} className="flex justify-between">
-                <span className="text-slate-500 dark:text-slate-400 capitalize">{key[0].toUpperCase()}</span>
-                <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                <span className="text-muted-foreground capitalize">{key[0].toUpperCase()}</span>
+                <span className="font-mono font-medium text-foreground/85">
                   {(data.componentScores![key] ?? 0).toFixed(3)}
                 </span>
               </div>
@@ -128,7 +128,7 @@ function ModeCard({
 
       {/* Guard failures */}
       {data.guardTriggered && data.guardFailures && data.guardFailures.length > 0 && (
-        <div className="mt-3 p-2 bg-red-50 dark:bg-red-950/30 rounded text-xs text-red-700 dark:text-red-400">
+        <div className="mt-3 p-2 bg-destructive/10 rounded text-xs text-destructive">
           <span className="font-semibold">Guard failures: </span>
           {data.guardFailures.map(f => `${f.component}=${(f.score ?? 0).toFixed(3)}`).join(", ")}
         </div>
@@ -150,32 +150,32 @@ export function ModeComparisonPanel({ balanced, strict }: ModeComparisonPanelPro
       </div>
 
       {/* Trust Gap */}
-      <Card className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4 shadow-sm">
+      <Card className="glass-card border-border/60 p-4 shadow-sm">
         <div className="flex items-center justify-between">
-          <div className="text-sm text-slate-600 dark:text-slate-400">
+          <div className="text-sm text-muted-foreground">
             Trust Gap (Balanced − Strict)
           </div>
           <div className="flex items-baseline gap-2">
             <span className={`text-2xl font-bold tabular-nums ${trustGap > 0 ? "text-amber-600 dark:text-amber-400" : "text-green-600 dark:text-green-400"}`}>
               {trustGap > 0 ? "+" : ""}{(trustGap ?? 0).toFixed(2)}
             </span>
-            <span className="text-xs text-slate-500 dark:text-slate-400">points</span>
+            <span className="text-xs text-muted-foreground">points</span>
           </div>
         </div>
         {/* Visual bar */}
         <div className="mt-2 flex items-center gap-2">
-          <div className="text-xs text-slate-400">Strict</div>
-          <div className="flex-1 h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative">
+          <div className="text-xs text-muted-foreground">Strict</div>
+          <div className="flex-1 h-3 bg-muted/70 rounded-full overflow-hidden relative">
             <div
               className="absolute inset-y-0 left-0 bg-red-400 dark:bg-red-600 rounded-l-full"
               style={{ width: `${Math.min(strictScore, 100)}%` }}
             />
             <div
-              className="absolute inset-y-0 left-0 bg-blue-500 dark:bg-blue-500 rounded-l-full opacity-60"
+              className="absolute inset-y-0 left-0 bg-primary rounded-l-full opacity-60"
               style={{ width: `${Math.min(balancedScore, 100)}%` }}
             />
           </div>
-          <div className="text-xs text-slate-400">Balanced</div>
+          <div className="text-xs text-muted-foreground">Balanced</div>
         </div>
       </Card>
     </div>

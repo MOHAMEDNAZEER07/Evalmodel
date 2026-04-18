@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.models.schemas import (
     ModelType, ModelFramework, ModelMetadata, ModelListResponse, ErrorResponse
 )
-from app.routes.auth import get_current_user
+from app.core.dependencies import get_current_user
 from app.services.smcp_engine import smcp_engine
 from supabase import Client
 
@@ -316,12 +316,12 @@ async def upload_model_version(
 @router.get("/{model_id}/versions/download_url")
 async def get_version_download_url(
     model_id: str,
-    file_path: str,
+    model_version_id: str,
     expires: int = 60,
     current_user: dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    """Generate a signed download URL for a model version file"""
+    """Generate a signed download URL for an owned model version file"""
     try:
         # Verify model ownership
         model = supabase.table("models")\
@@ -333,8 +333,19 @@ async def get_version_download_url(
         if not model.data or model.data.get("user_id") != current_user['id']:
             raise HTTPException(status_code=404, detail="Model not found")
 
+        # Resolve version file path server-side to prevent arbitrary path signing
+        version = supabase.table("model_versions")\
+            .select("id,model_id,file_path")\
+            .eq("id", model_version_id)\
+            .eq("model_id", model_id)\
+            .single()\
+            .execute()
+
+        if not version.data:
+            raise HTTPException(status_code=404, detail="Model version not found")
+
         # Create signed URL
-        signed = supabase.storage.from_(settings.STORAGE_BUCKET_MODELS).create_signed_url(file_path, expires)
+        signed = supabase.storage.from_(settings.STORAGE_BUCKET_MODELS).create_signed_url(version.data["file_path"], expires)
         return {"signed_url": signed.get('signedURL') or signed}
 
     except HTTPException:

@@ -54,16 +54,16 @@ export function TrustOverviewPanel({
   const strokeDashoffset = circumference * (1 - progress);
 
   const getGaugeColor = (score: number) => {
-    if (score >= 70) return "#1d4ed8"; // blue-700
-    if (score >= 40) return "#b45309"; // amber-700
-    return "#b91c1c"; // red-700
+    if (score >= 70) return "#3b82f6"; // blue-500
+    if (score >= 40) return "#f59e0b"; // amber-500
+    return "#ef4444"; // red-500
   };
 
   return (
-    <Card className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-8 shadow-sm">
+    <Card className="glass-card p-8 border-border/60">
       <div className="text-center">
         {/* Title */}
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-foreground mb-1">
           Trust Score
         </h2>
 
@@ -77,7 +77,7 @@ export function TrustOverviewPanel({
               r={radius}
               fill="none"
               stroke="currentColor"
-              className="text-slate-100 dark:text-slate-800"
+              className="text-muted/40"
               strokeWidth="10"
             />
             {/* Progress ring */}
@@ -108,12 +108,12 @@ export function TrustOverviewPanel({
         {/* Severity scale */}
         <div className="flex items-center justify-center gap-1 mb-6 text-xs">
           <div className="flex items-center gap-1">
-            <div className="w-16 h-2 rounded-l bg-red-200 dark:bg-red-900" />
-            <div className="w-16 h-2 bg-amber-200 dark:bg-amber-900" />
-            <div className="w-16 h-2 rounded-r bg-blue-200 dark:bg-blue-900" />
+            <div className="w-16 h-2 rounded-l bg-red-500/40" />
+            <div className="w-16 h-2 bg-amber-500/40" />
+            <div className="w-16 h-2 rounded-r bg-primary/50" />
           </div>
         </div>
-        <div className="flex justify-center gap-8 text-xs text-slate-500 dark:text-slate-400 -mt-4 mb-6">
+        <div className="flex justify-center gap-8 text-xs text-muted-foreground -mt-4 mb-6">
           <span>0 — Low</span>
           <span>40 — Moderate</span>
           <span>70 — High</span>
@@ -121,15 +121,15 @@ export function TrustOverviewPanel({
 
         {/* Key indicators row */}
         <TooltipProvider>
-          <div className="grid grid-cols-3 divide-x divide-slate-200 dark:divide-slate-700 border border-slate-200 dark:border-slate-700 rounded-lg">
+          <div className="grid grid-cols-3 divide-x divide-border border border-border rounded-lg bg-card/50">
             {/* DII */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="py-4 px-3 cursor-help">
-                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
                     DII
                   </div>
-                  <div className="text-xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                  <div className="text-xl font-bold tabular-nums text-foreground">
                     {(DII ?? 0).toFixed(3)}
                   </div>
                 </div>
@@ -146,10 +146,10 @@ export function TrustOverviewPanel({
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="py-4 px-3 cursor-help">
-                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
                     λ (Lambda)
                   </div>
-                  <div className="text-xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                  <div className="text-xl font-bold tabular-nums text-foreground">
                     {(lambdaValue ?? 0).toFixed(3)}
                   </div>
                 </div>
@@ -166,7 +166,7 @@ export function TrustOverviewPanel({
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="py-4 px-3 cursor-help">
-                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
                     Guard (τ={(guardThreshold ?? 0.3).toFixed(2)})
                   </div>
                   <div className="text-xl font-bold tabular-nums">
@@ -200,7 +200,7 @@ export function TrustOverviewPanel({
 
         {/* Verdict */}
         {verdict && (
-          <div className="mt-4 text-sm text-slate-600 dark:text-slate-400 italic">
+          <div className="mt-4 text-sm text-muted-foreground italic">
             {verdict.message}
           </div>
         )}

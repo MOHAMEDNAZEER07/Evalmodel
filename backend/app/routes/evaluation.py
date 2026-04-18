@@ -16,7 +16,7 @@ from app.models.schemas import (
     EvaluationRequest, EvaluationResult, ComparisonRequest, ComparisonResult,
     ModelType, ModelFramework, EvalScoreResult
 )
-from app.routes.auth import get_current_user
+from app.core.dependencies import get_current_user
 from app.services.smcp_engine import smcp_engine
 from app.services.meta_evaluator import meta_evaluator, MetaEvaluator
 from app.services.explainability import explainability_engine

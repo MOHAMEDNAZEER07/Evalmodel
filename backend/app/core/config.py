@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     DEBUG: bool = True
+    ENABLE_DEBUG_ROUTES: bool = False
     
     # Supabase Configuration
     # Provide safe defaults so Settings() can be constructed even if env vars are absent.

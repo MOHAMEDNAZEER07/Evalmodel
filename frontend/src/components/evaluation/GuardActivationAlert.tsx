@@ -24,7 +24,7 @@ export function GuardActivationAlert({
   return (
     <Alert
       variant="destructive"
-      className="border-2 border-red-500 bg-red-50 dark:bg-red-950/20 shadow-sm"
+      className="border-2 border-destructive/70 bg-destructive/10 shadow-sm"
     >
       <AlertTriangle className="h-5 w-5" />
       <AlertTitle className="text-base font-semibold">
@@ -55,7 +55,7 @@ export function GuardActivationAlert({
             ))}
           </ul>
         )}
-        <p className="mt-2 text-xs text-red-600/80 dark:text-red-400/80 italic">
+        <p className="mt-2 text-xs text-destructive/80 italic">
           The guard overrides the verdict to high-risk but does not alter the numeric trust score.
         </p>
       </AlertDescription>

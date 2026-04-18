@@ -13,7 +13,7 @@ import logging
 from app.core.supabase_client import get_supabase
 from app.core.config import settings
 from app.models.schemas import DatasetMetadata, ErrorResponse
-from app.routes.auth import get_current_user
+from app.core.dependencies import get_current_user
 from supabase import Client
 
 logger = logging.getLogger(__name__)

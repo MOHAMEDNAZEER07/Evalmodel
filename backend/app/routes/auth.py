@@ -10,8 +10,10 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from app.core.supabase_client import get_supabase
+from app.core.dependencies import get_current_user
 from supabase import Client
 import logging
+import os
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ pwd_context = CryptContext(
 )
 
 # JWT Configuration
-SECRET_KEY = "your-secret-key-change-this-in-production-use-env-variable"
+SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -123,52 +125,6 @@ def decode_token(token: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-# ============= DEPENDENCIES =============
-
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> Dict[str, Any]:
-    """Dependency to get current authenticated user from JWT token.
-    Returns minimal dict built from JWT claims — no DB round-trip.
-    The JWT signature already proves identity; a DB lookup every request
-    doubles Supabase traffic for no security benefit.
-    Endpoints that need the full user row (e.g. /me, /change-password)
-    fetch it themselves.
-    """
-    try:
-        token = credentials.credentials
-        payload = decode_token(token)
-        
-        # Check token type
-        if payload.get("type") != "access":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token type"
-            )
-        
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload"
-            )
-        
-        # Build user dict from token claims — no DB call needed
-        return {
-            "id": user_id,
-            "email": payload.get("email", ""),
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

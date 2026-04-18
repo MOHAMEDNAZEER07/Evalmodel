@@ -167,7 +167,7 @@ export default function ModelRegistry() {
   const handleDownloadModel = async (model: Model, version: ModelVersion) => {
     try {
       toast({ title: "Preparing download...", description: `Requesting download URL for ${model.name} v${version.version}...` });
-      const resp: any = await apiClient.getVersionDownloadUrl(model.id, version.file_path, 120);
+      const resp: any = await apiClient.getVersionDownloadUrl(model.id, version.id, 120);
       const signed = resp?.signed_url || resp?.signedURL || (typeof resp === 'string' ? resp : null);
       if (!signed) {
         throw new Error('No signed URL returned');

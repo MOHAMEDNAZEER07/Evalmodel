@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -31,6 +32,28 @@ from app.services.evaluation_cache import build_pair_cache_id, is_cache_fresh
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_allowed_model_formats() -> set[str]:
+    """Return allowed model file formats from env (default: onnx)."""
+    raw_value = os.getenv("ALLOWED_MODEL_FORMATS", "onnx")
+    return {
+        item.strip().lower().lstrip(".")
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+
+
+def _enforce_allowed_model_format(model_path: str) -> None:
+    """Fail closed for model files not in ALLOWED_MODEL_FORMATS."""
+    extension = Path(model_path).suffix.lower().lstrip(".")
+    allowed_formats = _get_allowed_model_formats()
+
+    if extension not in allowed_formats:
+        raise ValueError(
+            f"Model format '.{extension or 'unknown'}' is blocked. "
+            f"Allowed formats: {', '.join(sorted(allowed_formats)) or 'none'}"
+        )
 
 
 class EvaluationJobService:
@@ -349,6 +372,8 @@ class EvaluationJobService:
     
     def _load_model_object(self, model_path: str):
         """Load model from file using joblib or pickle."""
+        _enforce_allowed_model_format(model_path)
+
         try:
             import joblib
             return joblib.load(model_path)

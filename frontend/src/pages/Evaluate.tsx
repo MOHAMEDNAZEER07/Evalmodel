@@ -528,7 +528,7 @@ const Evaluate = () => {
               </div>
               
               {/* Progress bar */}
-              <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
+              <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
                 <div
                   className="bg-gradient-to-r from-primary to-accent h-full rounded-full transition-all duration-500 ease-out"
                   style={{ width: `${job.progress}%` }}
@@ -584,15 +584,15 @@ const Evaluate = () => {
             {/* Section Header */}
             <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
               <div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                <h2 className="text-2xl font-bold text-foreground">
                   Evaluation Report
                 </h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                <p className="text-sm text-muted-foreground mt-1">
                   {selectedModelName && selectedDatasetName
                     ? `${selectedModelName} on ${selectedDatasetName}`
                     : "Model evaluation results"}
                   {evaluationResult.trust_mode && (
-                    <span className="ml-2 text-xs font-mono bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
+                    <span className="ml-2 text-xs font-mono bg-muted text-muted-foreground px-2 py-0.5 rounded">
                       mode: {evaluationResult.trust_mode}
                     </span>
                   )}
@@ -602,7 +602,7 @@ const Evaluate = () => {
 
             <div className="space-y-6">
               {(evaluationResult.cache_hit || evaluationResult.cached) && (
-                <div className="flex items-center justify-between gap-3 p-3 rounded border border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-primary/40 bg-primary/10 text-foreground">
                   <div className="text-sm">
                     {evaluationResult.cache_message || 'Cached result returned instantly for this model+dataset pair.'}
                   </div>

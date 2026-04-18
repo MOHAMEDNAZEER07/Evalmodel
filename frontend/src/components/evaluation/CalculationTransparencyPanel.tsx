@@ -79,13 +79,13 @@ interface CalculationTransparencyPanelProps {
 function Eq({ label, expr, result }: { label?: string; expr: string; result?: string }) {
   return (
     <div className="flex items-baseline gap-2 py-1">
-      {label && <span className="text-xs text-slate-500 dark:text-slate-400 w-28 shrink-0">{label}</span>}
-      <code className="text-sm font-mono text-slate-800 dark:text-slate-200">
+      {label && <span className="text-xs text-muted-foreground w-28 shrink-0">{label}</span>}
+      <code className="text-sm font-mono text-foreground/90">
         {expr}
         {result !== undefined && (
           <>
             {" = "}
-            <span className="font-bold text-blue-700 dark:text-blue-400">{result}</span>
+            <span className="font-bold text-primary">{result}</span>
           </>
         )}
       </code>
@@ -96,9 +96,9 @@ function Eq({ label, expr, result }: { label?: string; expr: string; result?: st
 /** Render a key-value row */
 function DataRow({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
-    <div className="flex justify-between py-1 border-b border-slate-50 dark:border-slate-800 last:border-0">
-      <span className="text-xs text-slate-600 dark:text-slate-400">{label}</span>
-      <span className="text-xs font-mono font-semibold text-slate-900 dark:text-slate-100">
+    <div className="flex justify-between py-1 border-b border-border/30 last:border-0">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs font-mono font-semibold text-foreground">
         {value == null ? "—" : typeof value === "number" ? value.toFixed(4) : value}
       </span>
     </div>
@@ -187,17 +187,17 @@ export function CalculationTransparencyPanel({
   const isStrict = trustMode === "strict";
 
   return (
-    <Card className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm">
+    <Card className="glass-card border-border/60 shadow-sm">
       <Accordion type="multiple" className="w-full">
         {/* Section A: Raw Inputs */}
-        <AccordionItem value="raw-inputs" className="border-b border-slate-200 dark:border-slate-700">
-          <AccordionTrigger className="px-6 py-4 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:no-underline">
+        <AccordionItem value="raw-inputs" className="border-b border-border/60">
+          <AccordionTrigger className="px-6 py-4 text-sm font-semibold text-foreground hover:no-underline">
             A. Raw Inputs
           </AccordionTrigger>
           <AccordionContent className="px-6 pb-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
               <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                   Model Metrics
                 </h4>
                 {safeMetrics.accuracy != null && <DataRow label="Accuracy" value={safeMetrics.accuracy} />}
@@ -210,7 +210,7 @@ export function CalculationTransparencyPanel({
                 {safeMetrics.rmse != null && <DataRow label="RMSE" value={safeMetrics.rmse} />}
               </div>
               <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                   Dataset Instability Components
                 </h4>
                 <DataRow label="Imbalance (I)" value={I} />
@@ -226,14 +226,14 @@ export function CalculationTransparencyPanel({
         </AccordionItem>
 
         {/* Section B: Intermediate Calculations */}
-        <AccordionItem value="intermediate" className="border-b border-slate-200 dark:border-slate-700">
-          <AccordionTrigger className="px-6 py-4 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:no-underline">
+        <AccordionItem value="intermediate" className="border-b border-border/60">
+          <AccordionTrigger className="px-6 py-4 text-sm font-semibold text-foreground hover:no-underline">
             B. Intermediate Calculations
           </AccordionTrigger>
           <AccordionContent className="px-6 pb-4 space-y-4">
             {/* DII */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Dataset Instability Index (DII)
               </h4>
               {isStrict ? (
@@ -262,7 +262,7 @@ export function CalculationTransparencyPanel({
 
             {/* Component Scores */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Component Scores
               </h4>
               <Eq label="Health" expr={`H = 1 − DII = 1 − ${safeDII.toFixed(4)}`} result={(safeComponentScores.health ?? 0).toFixed(4)} />
@@ -285,10 +285,10 @@ export function CalculationTransparencyPanel({
 
             {/* Risk Values */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Risk Values
                 {safeRiskValues.amplification_applied && (
-                  <span className="ml-2 text-red-600 dark:text-red-400 normal-case">
+                  <span className="ml-2 text-destructive normal-case">
                     (γ={safeRiskValues.amplification_power} amplification applied)
                   </span>
                 )}
@@ -308,7 +308,7 @@ export function CalculationTransparencyPanel({
 
             {/* Lambda */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Lambda (λ) — Auto/User Balance
               </h4>
               {isStrict ? (
@@ -323,12 +323,12 @@ export function CalculationTransparencyPanel({
 
             {/* Hybrid Weights */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Hybrid Weight Computation
               </h4>
               <Eq label="Formula" expr="β_i = λ · β_auto_i + (1−λ) · β_user_i" />
               {betaAuto && (
-                <div className="ml-28 text-xs text-slate-500 dark:text-slate-400 font-mono space-y-0.5 mt-1">
+                <div className="ml-28 text-xs text-muted-foreground font-mono space-y-0.5 mt-1">
                   <div>
                     β_auto: P={(betaAuto.performance ?? 0).toFixed(3)} H={(betaAuto.health ?? 0).toFixed(3)}{" "}
                     F={safeRiskValues.fairness_excluded ? "Excl." : (betaAuto.fairness ?? 0).toFixed(3)}{" "}
@@ -345,7 +345,7 @@ export function CalculationTransparencyPanel({
 
             {/* Trust Score */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Trust Score Computation
               </h4>
               <Eq label="Formula" expr="T = 100 × Σ(β_i × C_i)" />
@@ -373,7 +373,7 @@ export function CalculationTransparencyPanel({
 
             {/* Guard Check */}
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Non-Compensatory Guard Check
               </h4>
               <Eq label="Condition" expr={`${safeRiskValues.fairness_excluded ? "min(P, H, R)" : "min(P, H, F, R)"} ≥ τ = ${safeGuardThreshold.toFixed(2)}`} />
@@ -389,7 +389,7 @@ export function CalculationTransparencyPanel({
                 result={guardTriggered ? "TRIGGERED" : "PASSED"}
               />
               {guardTriggered && guardFailures && guardFailures.length > 0 && (
-                <div className="mt-1 ml-28 text-xs text-red-600 dark:text-red-400 font-mono">
+                <div className="mt-1 ml-28 text-xs text-destructive font-mono">
                   Failures: {guardFailures.map(f => `${f.component}=${(f.score ?? 0).toFixed(4)}`).join(", ")}
                 </div>
               )}
@@ -400,7 +400,7 @@ export function CalculationTransparencyPanel({
         {/* Section C: Fairness Detail */}
         {fairnessMetrics && (
           <AccordionItem value="fairness" className="border-b-0">
-            <AccordionTrigger className="px-6 py-4 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:no-underline">
+            <AccordionTrigger className="px-6 py-4 text-sm font-semibold text-foreground hover:no-underline">
               C. Fairness Metrics Detail
             </AccordionTrigger>
             <AccordionContent className="px-6 pb-4">

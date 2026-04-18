@@ -73,9 +73,9 @@ const COMPONENT_META: Record<
 };
 
 function getBarColor(score: number) {
-  if (score >= 0.7) return "bg-blue-600 dark:bg-blue-500";
-  if (score >= 0.4) return "bg-amber-500 dark:bg-amber-400";
-  return "bg-red-600 dark:bg-red-500";
+  if (score >= 0.7) return "bg-primary";
+  if (score >= 0.4) return "bg-amber-500";
+  return "bg-red-500";
 }
 
 export function ComponentBreakdownPanel({
@@ -103,22 +103,22 @@ export function ComponentBreakdownPanel({
           return (
             <Tooltip key={key}>
               <TooltipTrigger asChild>
-                <Card className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5 shadow-sm cursor-help">
+                <Card className="glass-card border-border/60 p-5 shadow-sm cursor-help">
                   {/* Header */}
                   <div className="flex items-baseline justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                    <h3 className="text-sm font-semibold text-foreground">
                       {meta.label}
                     </h3>
-                    <span className="text-xs font-mono text-slate-400">({meta.abbrev})</span>
+                    <span className="text-xs font-mono text-muted-foreground">({meta.abbrev})</span>
                   </div>
 
                   {/* Score */}
-                  <div className="text-3xl font-bold tabular-nums text-slate-900 dark:text-slate-100 mb-3">
+                  <div className="text-3xl font-bold tabular-nums text-foreground mb-3">
                     {(score ?? 0).toFixed(3)}
                   </div>
 
                   {/* Bar */}
-                  <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mb-4">
+                  <div className="w-full h-2 bg-muted/70 rounded-full overflow-hidden mb-4">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${getBarColor(score)}`}
                       style={{ width: `${Math.min(score * 100, 100)}%` }}
@@ -128,21 +128,21 @@ export function ComponentBreakdownPanel({
                   {/* Detail rows */}
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between">
-                      <span className="text-slate-500 dark:text-slate-400">Risk</span>
-                      <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                      <span className="text-muted-foreground">Risk</span>
+                      <span className="font-mono font-medium text-foreground/85">
                         {(risk ?? 0).toFixed(3)}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500 dark:text-slate-400">Weight (β)</span>
-                      <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                      <span className="text-muted-foreground">Weight (β)</span>
+                      <span className="font-mono font-medium text-foreground/85">
                         {(weight ?? 0).toFixed(3)}
                       </span>
                     </div>
                     {breakdown && (
-                      <div className="flex justify-between border-t border-slate-100 dark:border-slate-800 pt-1.5">
-                        <span className="text-slate-500 dark:text-slate-400">Contribution</span>
-                        <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                      <div className="flex justify-between border-t border-border/40 pt-1.5">
+                        <span className="text-muted-foreground">Contribution</span>
+                        <span className="font-mono font-medium text-foreground/85">
                           {(breakdown[`${key}_contribution` as keyof typeof breakdown] ?? 0).toFixed(2)}
                         </span>
                       </div>
