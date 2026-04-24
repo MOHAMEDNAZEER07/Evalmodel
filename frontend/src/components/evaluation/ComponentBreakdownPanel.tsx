@@ -27,7 +27,7 @@ interface RiskValues {
   r_R?: number;
   DP?: number;
   delta?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 interface ComponentBreakdownPanelProps {

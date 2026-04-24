@@ -1,9 +1,14 @@
-import React from 'react';
+import { Suspense, lazy } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Brain, Sparkles, Info, CheckCircle2, XCircle } from 'lucide-react';
-import { FeatureImportanceChart } from './FeatureImportanceChart';
+
+const FeatureImportanceChart = lazy(() =>
+  import('./FeatureImportanceChart').then((module) => ({
+    default: module.FeatureImportanceChart,
+  }))
+);
 
 interface ExplainabilityDashboardProps {
   featureImportance: Array<{ feature: string; importance: number; rank: number }> | null;
@@ -16,7 +21,7 @@ interface ExplainabilityDashboardProps {
   } | null;
 }
 
-export const ExplainabilityDashboard: React.FC<ExplainabilityDashboardProps> = ({
+export const ExplainabilityDashboard = ({
   featureImportance,
   explainabilityMethod,
   shapSummary,
@@ -121,11 +126,13 @@ export const ExplainabilityDashboard: React.FC<ExplainabilityDashboardProps> = (
       )}
 
       {/* Feature Importance Chart */}
-      <FeatureImportanceChart 
-        data={featureImportance} 
-        method={explainabilityMethod || 'Unknown'}
-        topN={10}
-      />
+      <Suspense fallback={<div className="h-[400px] flex items-center justify-center text-sm text-muted-foreground">Loading feature chart...</div>}>
+        <FeatureImportanceChart 
+          data={featureImportance} 
+          method={explainabilityMethod || 'Unknown'}
+          topN={10}
+        />
+      </Suspense>
 
       {/* Interpretation Guide */}
       <Card>

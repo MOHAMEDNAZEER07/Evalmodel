@@ -25,11 +25,24 @@ import {
 } from "@/components/ui/command";
 import { globalSearchService } from "@/lib/global-search";
 
+interface SearchModel {
+  id: string;
+  name?: string;
+  framework?: string;
+  model_type?: string;
+}
+
+interface SearchDataset {
+  id: string;
+  name?: string;
+  row_count?: number;
+}
+
 const Navbar = () => {
   const [darkMode, setDarkMode] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<{models: any[], datasets: any[]}>({ models: [], datasets: [] });
+  const [searchResults, setSearchResults] = useState<{models: SearchModel[]; datasets: SearchDataset[]}>({ models: [], datasets: [] });
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
@@ -215,7 +228,7 @@ const Navbar = () => {
           
           {searchResults.models.length > 0 && (
             <CommandGroup heading="Models">
-              {searchResults.models.map((model: any) => (
+              {searchResults.models.map((model) => (
                 <CommandItem
                   key={model.id}
                   onSelect={() => {
@@ -237,7 +250,7 @@ const Navbar = () => {
           
           {searchResults.datasets.length > 0 && (
             <CommandGroup heading="Datasets">
-              {searchResults.datasets.map((dataset: any) => (
+              {searchResults.datasets.map((dataset) => (
                 <CommandItem
                   key={dataset.id}
                   onSelect={() => {

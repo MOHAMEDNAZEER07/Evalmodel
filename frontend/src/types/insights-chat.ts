@@ -38,10 +38,10 @@ export interface EvaluationData {
   // Explainability
   feature_importance?: Array<{ feature: string; importance: number; rank: number }>;
   explainability_method?: string;
-  shap_summary?: Record<string, any>;
+  shap_summary?: Record<string, unknown>;
   // Fairness
-  fairness_metrics?: Record<string, any>;
-  group_metrics?: Record<string, any>;
+  fairness_metrics?: Record<string, unknown>;
+  group_metrics?: Record<string, unknown>;
   sensitive_attribute?: string;
 }
 
@@ -97,10 +97,10 @@ export interface InsightsAIChatProps {
   // Explainability props
   featureImportance?: Array<{ feature: string; importance: number; rank: number }>;
   explainabilityMethod?: string;
-  shapSummary?: Record<string, any>;
+  shapSummary?: Record<string, unknown>;
   // Fairness props
-  fairnessMetrics?: Record<string, any>;
-  groupMetrics?: Record<string, any>;
+  fairnessMetrics?: Record<string, unknown>;
+  groupMetrics?: Record<string, unknown>;
   sensitiveAttribute?: string;
   // Display mode
   inline?: boolean;

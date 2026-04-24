@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -137,18 +137,6 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
     }
   }, [initialQuestion]);
 
-  // Auto-send initial question
-  useEffect(() => {
-    if (initialQuestion && isOpen && !hasAutoSent && input === initialQuestion) {
-      // Small delay to ensure UI is ready
-      const timer = setTimeout(() => {
-        setHasAutoSent(true);
-        sendMessage();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [initialQuestion, isOpen, hasAutoSent, input]);
-
   const handleOpenChange = (open: boolean) => {
     setIsOpen(open);
     if (onOpenChange) {
@@ -158,7 +146,7 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     if (inline) {
       // For inline mode, scroll within the container only
       if (messagesContainerRef.current) {
@@ -168,13 +156,13 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
       // For floating mode, use scrollIntoView
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  };
+  }, [inline]);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, inline]);
+  }, [messages, scrollToBottom]);
 
-  const getContextInfo = () => {
+  const getContextInfo = useCallback(() => {
     const allEvalsContext = buildAllEvaluationsContext(allEvaluations, allModels, allDatasets);
     return buildContextMessage(insightType, allEvalsContext, {
       modelName, modelType, modelFramework, datasetName, evalScore, modelMetrics,
@@ -184,9 +172,41 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
       fairnessMetrics, groupMetrics, sensitiveAttribute,
       qualityScore, outlierCount, correlationCount, issues, summary,
     });
-  };
+  }, [
+    allEvaluations,
+    allModels,
+    allDatasets,
+    insightType,
+    modelName,
+    modelType,
+    modelFramework,
+    datasetName,
+    evalScore,
+    modelMetrics,
+    trustScore,
+    metaScore,
+    dii,
+    componentScores,
+    riskValues,
+    hybridWeights,
+    datasetHealthScore,
+    metaFlags,
+    metaRecommendations,
+    metaVerdict,
+    featureImportance,
+    explainabilityMethod,
+    shapSummary,
+    fairnessMetrics,
+    groupMetrics,
+    sensitiveAttribute,
+    qualityScore,
+    outlierCount,
+    correlationCount,
+    issues,
+    summary,
+  ]);
 
-  const sendMessage = async () => {
+  const sendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = {
@@ -293,17 +313,18 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
 
         setMessages(prev => [...prev, assistantMessage]);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error sending message:", error);
       
       // Extract meaningful error info
       let errorDetail = "";
-      if (error?.message) {
+      if (error instanceof Error) {
         errorDetail = error.message;
       }
-      if (error?.context) {
+      if (typeof error === "object" && error !== null && "context" in error) {
         try {
-          const body = typeof error.context === 'string' ? JSON.parse(error.context) : error.context;
+          const contextValue = (error as { context?: unknown }).context;
+          const body = typeof contextValue === 'string' ? JSON.parse(contextValue) : contextValue;
           if (body?.error) errorDetail = body.error;
           if (body?.code) errorDetail += ` (${body.code})`;
         } catch { /* ignore parse errors */ }
@@ -335,7 +356,38 @@ I have YOUR dataset's complete quality report. Let's improve YOUR data! What wou
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [
+    input,
+    isLoading,
+    messages,
+    insightType,
+    modelName,
+    modelType,
+    modelFramework,
+    datasetName,
+    evalScore,
+    modelMetrics,
+    qualityScore,
+    outlierCount,
+    correlationCount,
+    issues,
+    summary,
+    allEvaluations,
+    allModels,
+    allDatasets,
+    getContextInfo,
+  ]);
+
+  // Auto-send initial question
+  useEffect(() => {
+    if (initialQuestion && isOpen && !hasAutoSent && input === initialQuestion) {
+      const timer = setTimeout(() => {
+        setHasAutoSent(true);
+        void sendMessage();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [initialQuestion, isOpen, hasAutoSent, input, sendMessage]);
 
   const quickQuestions = insightType === "model" ? [
     "What are MY model's strongest metrics?",

@@ -40,8 +40,9 @@ export default function Settings() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || 'Failed to change password' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to change password';
+      setMessage({ type: 'error', text: message });
     } finally {
       setIsLoading(false);
     }

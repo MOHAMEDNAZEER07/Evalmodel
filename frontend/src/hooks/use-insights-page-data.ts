@@ -3,11 +3,27 @@
  * management for the Insights page.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { apiClient } from "@/lib/api-client";
 import { useInsightsData } from "@/hooks/use-insights-data";
 import type { Dataset } from "@/types/dashboard";
 import type { ModelData, Evaluation } from "@/types/insights";
+
+interface ApiModel {
+  id: string;
+  name: string;
+  description?: string;
+  model_type?: string;
+  type?: string;
+  framework?: string;
+  file_size?: number;
+  uploaded_at?: string;
+  is_evaluated?: boolean;
+}
+
+interface ListModelsResponse {
+  models?: ApiModel[];
+}
 
 export function useInsightsPageData() {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
@@ -64,40 +80,41 @@ export function useInsightsPageData() {
     fetchDatasets();
   }, []);
 
-  // Fetch available models on mount
-  useEffect(() => {
-    const fetchModels = async () => {
-      setLoadingModels(true);
-      try {
-        const token = sessionStorage.getItem("access_token");
-        if (token) apiClient.setToken(token);
-        const response = await apiClient.listModels();
-        setModels(
-          (response.models || []).map((m: any) => ({
-            id: m.id,
-            name: m.name,
-            description: m.description || "",
-            model_type: m.model_type || m.type || "unknown",
-            framework: m.framework || "unknown",
-            file_size: m.file_size || 0,
-            uploaded_at: m.uploaded_at || new Date().toISOString(),
-            is_evaluated: m.is_evaluated || false,
-          } as ModelData))
-        );
-        if (insightType === "model") {
-          const evaluatedModel = (response.models || []).find((m: any) => m.is_evaluated);
-          if (evaluatedModel && selectedDatasetId) {
-            setSelectedModelId(evaluatedModel.id);
-          }
+  const fetchModels = useCallback(async () => {
+    setLoadingModels(true);
+    try {
+      const token = sessionStorage.getItem("access_token");
+      if (token) apiClient.setToken(token);
+      const response = await apiClient.listModels() as ListModelsResponse;
+      setModels(
+        (response.models || []).map((m) => ({
+          id: m.id,
+          name: m.name,
+          description: m.description || "",
+          model_type: m.model_type || m.type || "unknown",
+          framework: m.framework || "unknown",
+          file_size: m.file_size || 0,
+          uploaded_at: m.uploaded_at || new Date().toISOString(),
+          is_evaluated: m.is_evaluated || false,
+        } as ModelData))
+      );
+      if (insightType === "model") {
+        const evaluatedModel = (response.models || []).find((m) => m.is_evaluated);
+        if (evaluatedModel && selectedDatasetId) {
+          setSelectedModelId(evaluatedModel.id);
         }
-      } catch (err) {
-        console.error("Error fetching models:", err);
-      } finally {
-        setLoadingModels(false);
       }
-    };
-    fetchModels();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    } catch (err) {
+      console.error("Error fetching models:", err);
+    } finally {
+      setLoadingModels(false);
+    }
+  }, [insightType, selectedDatasetId]);
+
+  // Fetch available models
+  useEffect(() => {
+    void fetchModels();
+  }, [fetchModels]);
 
   // Auto-select model when switching to model tab
   useEffect(() => {

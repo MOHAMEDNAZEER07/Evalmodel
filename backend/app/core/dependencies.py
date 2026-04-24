@@ -16,8 +16,19 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 # JWT Configuration (must match auth.py)
-SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 ALGORITHM = "HS256"
+
+
+def _get_jwt_secret() -> str:
+    """Resolve JWT secret at runtime to keep imports test-friendly."""
+    secret = os.getenv("JWT_SECRET_KEY")
+    if not secret:
+        logger.error("JWT_SECRET_KEY is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server authentication is not configured"
+        )
+    return secret
 
 
 def get_supabase() -> Client:
@@ -50,7 +61,7 @@ async def get_current_user(
         
         # Decode and verify our custom JWT token (not Supabase auth token)
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(token, _get_jwt_secret(), algorithms=[ALGORITHM])
             user_id = payload.get("sub")
             email = payload.get("email")
             

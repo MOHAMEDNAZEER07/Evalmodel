@@ -25,7 +25,7 @@ export interface EvaluationJobState {
   status: JobStatus;
   progress: number;
   step: string;
-  result: any | null;
+  result: unknown;
   error: string | null;
 }
 

@@ -18,6 +18,8 @@ import time
 from app.routes import models, evaluation, datasets, auth, insights, test_storage
 from app.core.config import settings
 
+settings.validate_runtime_config()
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

@@ -1513,7 +1513,7 @@ class MetaEvaluator:
             # Get component scores (these don't depend on lambda)
             perf_score = self._clip(self._calculate_performance_score(metrics, model_type))
             health_score = self._clip(1.0 - dii_score)
-            fair_score, dp_value = self._calculate_fairness_score(fairness_result)
+            fair_score, dp_value, _fairness_evaluated = self._calculate_fairness_score(fairness_result)
             fair_score = self._clip(fair_score)
             robust_score, delta_value = self._calculate_robustness_score(metrics, train_metrics, model_type)
             robust_score = self._clip(robust_score)

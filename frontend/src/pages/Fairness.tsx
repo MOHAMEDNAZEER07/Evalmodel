@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, Suspense, lazy } from "react";
+import type { LucideIcon } from "lucide-react";
 import { Scale, AlertTriangle, CheckCircle2, Info, RefreshCw, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,26 +8,20 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
+import { apiClient } from "@/lib/api-client";
 import { Progress } from "@/components/ui/progress";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-  LineChart,
-  Line,
-  Legend,
-  RadarChart,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-  Radar,
-} from "recharts";
+
+const FairnessMetricsChart = lazy(() =>
+  import("@/components/fairness/FairnessMetricsChart").then((module) => ({
+    default: module.FairnessMetricsChart,
+  }))
+);
+
+const FairnessGroupCharts = lazy(() =>
+  import("@/components/fairness/FairnessGroupCharts").then((module) => ({
+    default: module.FairnessGroupCharts,
+  }))
+);
 
 interface FairnessMetrics {
   demographic_parity_difference: number;
@@ -68,6 +63,16 @@ interface Evaluation {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasFairnessMetrics(value: unknown): value is Evaluation {
+  if (!isRecord(value)) return false;
+  const fairness = value.fairness_metrics;
+  return isRecord(fairness) && Object.keys(fairness).length > 0;
+}
+
 const FAIRNESS_THRESHOLDS = {
   excellent: 0.9,
   good: 0.75,
@@ -90,49 +95,38 @@ export default function Fairness() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const { toast } = useToast();
 
-  useEffect(() => {
-    loadEvaluations();
-  }, []);
-
-  const loadEvaluations = async () => {
+  const loadEvaluations = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await (supabase as any)
-        .from('evaluations')
-        .select(`
-          *,
-          models:model_id(name),
-          datasets:dataset_id(name)
-        `)
-        .order('evaluated_at', { ascending: false })
-        .limit(100);
-
-      if (error) throw error;
+      const response = await apiClient.getEvaluationHistory(100, false);
 
       // Filter evaluations that have fairness metrics
-      const fairnessEvaluations = (data || []).filter(
-        (evalItem: any) => evalItem.fairness_metrics && Object.keys(evalItem.fairness_metrics).length > 0
-      ) as Evaluation[];
+      const fairnessEvaluations = (response.evaluations || []).filter(hasFairnessMetrics);
 
       setEvaluations(fairnessEvaluations);
 
       // Auto-select the most recent evaluation
-      if (fairnessEvaluations.length > 0 && !selectedEvaluationId) {
+      if (fairnessEvaluations.length > 0) {
         const mostRecent = fairnessEvaluations[0];
-        setSelectedEvaluationId(mostRecent.id);
-        setCurrentEvaluation(mostRecent);
+        setSelectedEvaluationId((prev) => prev || mostRecent.id);
+        setCurrentEvaluation((prev) => prev || mostRecent);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to load fairness evaluations.";
       console.error('Error loading evaluations:', error);
       toast({
         title: "Error Loading Data",
-        description: error.message || "Failed to load fairness evaluations.",
+        description: message,
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    loadEvaluations();
+  }, [loadEvaluations]);
 
   const handleEvaluationSelect = (evaluationId: string) => {
     setSelectedEvaluationId(evaluationId);
@@ -159,7 +153,7 @@ export default function Fairness() {
     return { level: "Poor", color: METRIC_COLORS.poor };
   };
 
-  const getMetricInterpretation = (metric: string, value: number): { status: string; icon: any; color: string } => {
+  const getMetricInterpretation = (metric: string, value: number): { status: string; icon: LucideIcon; color: string } => {
     const absValue = Math.abs(value);
     
     if (metric.includes('difference')) {
@@ -252,14 +246,6 @@ export default function Fairness() {
     precision: group.precision * 100,
     recall: group.recall * 100,
     f1_score: group.f1_score * 100,
-  }));
-
-  const radarData = groupMetrics.map(group => ({
-    metric: group.group,
-    Accuracy: group.accuracy * 100,
-    Precision: group.precision * 100,
-    Recall: group.recall * 100,
-    'F1 Score': group.f1_score * 100,
   }));
 
   return (
@@ -378,47 +364,22 @@ export default function Fairness() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={400}>
-                    <BarChart data={metricsChartData} layout="vertical" margin={{ left: 150 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" domain={[0, 1]} />
-                      <YAxis type="category" dataKey="name" width={145} />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (active && payload && payload.length) {
-                            const data = payload[0].payload;
-                            return (
-                              <div className="bg-background border border-border rounded-lg shadow-lg p-3">
-                                <p className="font-semibold text-sm mb-1">{data.name}</p>
-                                <p className="text-sm">Value: {data.rawValue.toFixed(4)}</p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <data.interpretation.icon className={`h-4 w-4 ${data.interpretation.color}`} />
-                                  <span className={`text-sm font-medium ${data.interpretation.color}`}>
-                                    {data.interpretation.status}
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          }
-                          return null;
-                        }}
-                      />
-                      <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                        {metricsChartData.map((entry, index) => (
-                          <Cell
-                            key={`cell-${index}`}
-                            fill={
-                              entry.interpretation.status === 'Fair'
-                                ? METRIC_COLORS.excellent
-                                : entry.interpretation.status === 'Moderate'
-                                ? METRIC_COLORS.fair
-                                : METRIC_COLORS.poor
-                            }
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<div className="h-[400px] flex items-center justify-center text-sm text-muted-foreground">Loading chart...</div>}>
+                    <FairnessMetricsChart
+                      data={metricsChartData.map((metric) => ({
+                        name: metric.name,
+                        value: metric.value,
+                        rawValue: metric.rawValue as number,
+                        interpretation: {
+                          status: metric.interpretation.status,
+                          color: metric.interpretation.color,
+                        },
+                      }))}
+                      goodColor={METRIC_COLORS.excellent}
+                      moderateColor={METRIC_COLORS.fair}
+                      poorColor={METRIC_COLORS.poor}
+                    />
+                  </Suspense>
 
                   {/* Metrics Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
@@ -490,48 +451,11 @@ export default function Fairness() {
             <TabsContent value="groups" className="space-y-6">
               {groupMetrics.length > 0 ? (
                 <>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Performance by Group</CardTitle>
-                      <CardDescription>Comparing metrics across different demographic groups</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={400}>
-                        <LineChart data={groupComparisonData}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="group" />
-                          <YAxis domain={[0, 100]} label={{ value: 'Percentage', angle: -90, position: 'insideLeft' }} />
-                          <Tooltip />
-                          <Legend />
-                          <Line type="monotone" dataKey="accuracy" stroke="#3b82f6" strokeWidth={2} />
-                          <Line type="monotone" dataKey="precision" stroke="#10b981" strokeWidth={2} />
-                          <Line type="monotone" dataKey="recall" stroke="#f59e0b" strokeWidth={2} />
-                          <Line type="monotone" dataKey="f1_score" stroke="#8b5cf6" strokeWidth={2} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Radar Chart: Multi-Metric View</CardTitle>
-                      <CardDescription>360° view of performance across groups</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={400}>
-                        <RadarChart data={radarData}>
-                          <PolarGrid />
-                          <PolarAngleAxis dataKey="metric" />
-                          <PolarRadiusAxis domain={[0, 100]} />
-                          <Radar name="Accuracy" dataKey="Accuracy" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} />
-                          <Radar name="Precision" dataKey="Precision" stroke="#10b981" fill="#10b981" fillOpacity={0.3} />
-                          <Radar name="Recall" dataKey="Recall" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.3} />
-                          <Radar name="F1 Score" dataKey="F1 Score" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.3} />
-                          <Legend />
-                        </RadarChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
+                  <Suspense fallback={<div className="h-[400px] flex items-center justify-center text-sm text-muted-foreground">Loading group charts...</div>}>
+                    <FairnessGroupCharts
+                      groupComparisonData={groupComparisonData}
+                    />
+                  </Suspense>
 
                   {/* Group Metrics Table */}
                   <Card>

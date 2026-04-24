@@ -1,6 +1,9 @@
 """
 Direct test endpoint to debug storage download
 """
+# Prevent pytest from collecting this debug route as a test module.
+__test__ = False
+
 from fastapi import APIRouter, Depends
 from supabase import Client
 import pandas as pd

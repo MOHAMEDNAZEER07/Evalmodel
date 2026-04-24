@@ -56,7 +56,7 @@ async def load_dataset_dataframe(dataset_id: str, user_id: str, supabase: Client
         raise
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
-        raise HTTPException(status_code=500, detail=f"Error loading dataset: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error loading dataset")
 
 
 @router.get("/data-quality/{dataset_id}")
@@ -93,7 +93,7 @@ async def analyze_data_quality(
         raise
     except Exception as e:
         logger.error(f"Error analyzing data quality: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error analyzing data quality")
 
 
 @router.get("/outliers/{dataset_id}")
@@ -133,7 +133,7 @@ async def detect_outliers(
         raise
     except Exception as e:
         logger.error(f"Error detecting outliers: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error detecting outliers")
 
 
 @router.get("/correlations/{dataset_id}")
@@ -175,7 +175,7 @@ async def calculate_correlations(
         raise
     except Exception as e:
         logger.error(f"Error calculating correlations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error calculating correlations")
 
 
 @router.get("/summary/{dataset_id}")
@@ -227,4 +227,4 @@ async def get_insights_summary(
         raise
     except Exception as e:
         logger.error(f"Error generating insights summary: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error generating insights summary")

@@ -136,7 +136,9 @@ async def evaluate_model(
             # Download model
             model_data = supabase.storage.from_(settings.STORAGE_BUCKET_MODELS)\
                 .download(model["file_path"])
-            model_path = os.path.join(temp_dir, "model")
+            model_ext = os.path.splitext(model.get("file_path", ""))[1]
+            model_filename = f"model{model_ext}" if model_ext else "model"
+            model_path = os.path.join(temp_dir, model_filename)
             with open(model_path, "wb") as f:
                 f.write(model_data)
             
@@ -177,26 +179,14 @@ async def evaluate_model(
             X_train, X_test = X[:split_idx], X[split_idx:]
             y_train, y_test = y[:split_idx], y[split_idx:]
             
-            # Load model once for all analyses - try joblib first, then pickle
-            model_obj = None
+            # Use centralized loader so format allow-list and compatibility fallbacks are consistent.
             try:
-                import joblib
-                model_obj = joblib.load(model_path)
-                logger.info(f"Model loaded successfully with joblib")
-            except Exception as e:
-                logger.debug(f"joblib load failed: {e}, trying pickle")
-                try:
-                    import pickle
-                    with open(model_path, 'rb') as f:
-                        model_obj = pickle.load(f)
-                    logger.info(f"Model loaded successfully with pickle")
-                except Exception as pickle_err:
-                    logger.error(f"Both joblib and pickle failed to load model: {pickle_err}")
-                    raise ValueError(
-                        f"Cannot load model file. This may be due to Python version mismatch or "
-                        f"incompatible scikit-learn version. Please re-upload the model trained with "
-                        f"the current environment (Python 3.10, scikit-learn 1.6.x). Error: {pickle_err}"
-                    )
+                model_obj = smcp_engine.load_model(model_path, framework)
+            except Exception as model_load_err:
+                logger.error(f"Model loading failed: {model_load_err}")
+                raise ValueError(
+                    "Cannot load model file. Ensure the model format is allowed and compatible with the current runtime."
+                )
             
             # Get predictions for fairness and robustness analysis
             y_pred = np.asarray(model_obj.predict(X_test))
@@ -545,13 +535,13 @@ async def evaluate_model(
         logger.error(f"Model compatibility error: {e}")
         raise HTTPException(
             status_code=400,
-            detail=f"Model compatibility issue: {str(e)}. Please ensure your model file is saved with a compatible Python version and framework."
+            detail="Model compatibility issue. Please ensure your model file is saved with a compatible Python version and framework."
         )
     except Exception as e:
         logger.error(f"Error during evaluation: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Evaluation failed: {str(e)}"
+            detail="Evaluation failed"
         )
 
 @router.post("/compare", response_model=ComparisonResult)
@@ -653,7 +643,7 @@ async def compare_models(
         raise
     except Exception as e:
         logger.error(f"Error comparing models: {e}")
-        raise HTTPException(status_code=500, detail=f"Comparison failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Comparison failed")
 
 @router.get("/history")
 async def get_evaluation_history(
@@ -762,7 +752,7 @@ async def evaluate_model_async(
     
     except Exception as e:
         logger.error(f"Failed to start async evaluation: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start evaluation: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start evaluation")
 
 
 @router.get("/evaluate/status/{job_id}")

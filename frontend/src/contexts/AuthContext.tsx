@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       // Verify token and get user
       apiClient.getCurrentUser()
-        .then((userData: any) => {
+        .then((userData: User) => {
           setUser(userData);
         })
         .catch((error) => {

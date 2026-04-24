@@ -44,6 +44,7 @@ SUPABASE_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 # API Settings
+APP_ENV=development
 API_HOST=0.0.0.0
 API_PORT=8000
 DEBUG=True
@@ -55,6 +56,10 @@ ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 MAX_UPLOAD_SIZE_MB=1024
 STORAGE_BUCKET_MODELS=models
 STORAGE_BUCKET_DATASETS=datasets
+ALLOWED_MODEL_FORMATS=onnx
+
+# Production Safety
+# ENABLE_DEBUG_ROUTES must stay false in production
 ```
 
 ### 4. Setup Supabase Database
@@ -121,12 +126,17 @@ The Standardized Model Comparison Pipeline (SMCP) automatically:
 
 ### Supported File Formats
 
+Allowed formats are controlled by `ALLOWED_MODEL_FORMATS` (comma-separated).
+Default is `onnx` for safer production operation.
+
 | Extension | Framework | Model Type |
 |-----------|-----------|------------|
 | `.pkl` | scikit-learn | Any |
 | `.pt`, `.pth` | PyTorch | Any |
 | `.h5` | Keras/TensorFlow | Any |
 | `.onnx` | ONNX | Any |
+
+If `ALLOWED_MODEL_FORMATS=onnx`, uploads and evaluations will reject non-ONNX files.
 
 ### Dataset Format
 
@@ -200,6 +210,8 @@ Common HTTP status codes:
 3. Use Supabase Service Role Key for admin operations
 4. Configure proper logging
 5. Use production-grade WSGI server (Gunicorn + Uvicorn)
+6. Set `APP_ENV=production` to enable strict startup config validation
+7. Keep `ALLOWED_MODEL_FORMATS=onnx` in production
 
 ### Example Production Command
 

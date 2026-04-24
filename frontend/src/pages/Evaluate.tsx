@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -37,11 +37,11 @@ interface Dataset {
 // Add type for dataset preview responses
 interface DatasetPreviewResponse {
   columns?: string[];
-  rows?: Array<Record<string, any>>;
-  data?: Array<Record<string, any>>;
+  rows?: Array<Record<string, unknown>>;
+  data?: Array<Record<string, unknown>>;
   preview?: {
     columns?: string[];
-    rows?: Array<Record<string, any>>;
+    rows?: Array<Record<string, unknown>>;
   };
 }
 
@@ -74,7 +74,7 @@ interface EvaluationResult {
     health: number;
     fairness: number;
     robustness: number;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   hybrid_weights?: {
     performance: number;
@@ -145,7 +145,7 @@ interface EvaluationResult {
   global_penalty_applied?: boolean;
   instability_penalty_value?: number;
   breakdown?: Record<string, number>;
-  strict_result?: Record<string, any>;
+  strict_result?: Record<string, unknown>;
 }
 
 const Evaluate = () => {
@@ -189,12 +189,6 @@ const Evaluate = () => {
     setTimeout(() => { win.print(); win.close(); }, 500);
   };
 
-  useEffect(() => {
-    if (user) {
-      loadData();
-    }
-  }, [user]);
-
   // When selectedDataset changes, fetch a small preview to extract column names
   useEffect(() => {
     const loadColumns = async () => {
@@ -203,7 +197,7 @@ const Evaluate = () => {
       if (!selectedDataset) return;
       try {
         const previewRaw = await apiClient.previewDataset(selectedDataset, 1);
-        const preview = previewRaw as DatasetPreviewResponse | Array<Record<string, any>> | null;
+        const preview = previewRaw as DatasetPreviewResponse | Array<Record<string, unknown>> | null;
         
         // Try to derive columns robustly from various possible shapes
         let cols: string[] = [];
@@ -220,7 +214,7 @@ const Evaluate = () => {
         } else if (preview.data && Array.isArray(preview.data) && preview.data.length > 0) {
           cols = Object.keys(preview.data[0]);
         } else if (typeof preview === 'object') {
-          cols = Object.keys(preview as Record<string, any>);
+          cols = Object.keys(preview as Record<string, unknown>);
         }
 
         // Normalize and set
@@ -234,7 +228,7 @@ const Evaluate = () => {
     loadColumns();
   }, [selectedDataset]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setIsLoading(true);
       const token = sessionStorage.getItem('access_token');
@@ -258,7 +252,13 @@ const Evaluate = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    if (user) {
+      void loadData();
+    }
+  }, [user, loadData]);
 
   const handleEvaluate = async () => {
     if (!selectedModel || !selectedDataset) {

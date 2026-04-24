@@ -43,10 +43,10 @@ export interface Evaluation {
   // Explainability
   feature_importance?: Array<{ feature: string; importance: number; rank: number }>;
   explainability_method?: string;
-  shap_summary?: Record<string, any>;
+  shap_summary?: Record<string, unknown>;
   // Fairness
-  fairness_metrics?: Record<string, any>;
-  group_metrics?: Record<string, any>;
+  fairness_metrics?: Record<string, unknown>;
+  group_metrics?: Record<string, unknown>;
   sensitive_attribute?: string;
 }
 

@@ -217,7 +217,9 @@ class EvaluationJobService:
                 # Download model
                 model_data = db.storage.from_(settings.STORAGE_BUCKET_MODELS) \
                     .download(model["file_path"])
-                model_path = os.path.join(temp_dir, "model")
+                model_ext = os.path.splitext(model.get("file_path", ""))[1]
+                model_filename = f"model{model_ext}" if model_ext else "model"
+                model_path = os.path.join(temp_dir, model_filename)
                 with open(model_path, "wb") as f:
                     f.write(model_data)
                 
@@ -267,7 +269,7 @@ class EvaluationJobService:
                 y_train, y_test = y[:split_idx], y[split_idx:]
                 
                 # Load model object
-                model_obj = self._load_model_object(model_path)
+                model_obj = self._load_model_object(model_path, framework)
                 # Wrap in DataFrame to preserve feature names and suppress sklearn warnings
                 X_test_df = pd.DataFrame(X_test, columns=feature_names)
                 y_pred = np.asarray(model_obj.predict(X_test_df))
@@ -370,17 +372,10 @@ class EvaluationJobService:
             self.update_job(job_id, "failed", 0, "Evaluation failed", error=str(e))
             raise
     
-    def _load_model_object(self, model_path: str):
-        """Load model from file using joblib or pickle."""
+    def _load_model_object(self, model_path: str, framework: ModelFramework):
+        """Load model using the centralized SMCP loader for consistent safety and compatibility handling."""
         _enforce_allowed_model_format(model_path)
-
-        try:
-            import joblib
-            return joblib.load(model_path)
-        except Exception:
-            import pickle
-            with open(model_path, 'rb') as f:
-                return pickle.load(f)
+        return smcp_engine.load_model(model_path, framework)
     
     def _compute_dataset_stats(
         self, df: pd.DataFrame, feature_names: list,

@@ -3,8 +3,10 @@
  * Used by both inline and floating chat modes.
  */
 
-import ReactMarkdown from "react-markdown";
+import { Suspense, lazy } from "react";
 import type { Components } from "react-markdown";
+
+const ReactMarkdown = lazy(() => import("react-markdown"));
 
 /** Standard set of Markdown component overrides for the AI chat. */
 export const markdownComponents: Components = {
@@ -57,13 +59,17 @@ export const markdownComponents: Components = {
 
 interface ChatMarkdownProps {
   content: string;
+  className?: string;
+  components?: Components;
 }
 
 /** Renders markdown content using the shared AI chat styles. */
-export function ChatMarkdown({ content }: ChatMarkdownProps) {
+export function ChatMarkdown({ content, className, components }: ChatMarkdownProps) {
   return (
-    <div className="text-sm prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-primary prose-strong:font-semibold">
-      <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
-    </div>
+    <Suspense fallback={<p className="text-sm whitespace-pre-wrap leading-relaxed">{content}</p>}>
+      <div className={className || "text-sm prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-primary prose-strong:font-semibold"}>
+        <ReactMarkdown components={components || markdownComponents}>{content}</ReactMarkdown>
+      </div>
+    </Suspense>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -36,13 +36,7 @@ const Explainability = () => {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  useEffect(() => {
-    if (user) {
-      loadEvaluations();
-    }
-  }, [user]);
-
-  const loadEvaluations = async () => {
+  const loadEvaluations = useCallback(async () => {
     try {
       setIsLoading(true);
       const token = sessionStorage.getItem('access_token');
@@ -74,7 +68,13 @@ const Explainability = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedEvaluation, toast]);
+
+  useEffect(() => {
+    if (user) {
+      loadEvaluations();
+    }
+  }, [user, loadEvaluations]);
 
   const handleEvaluationSelect = (evaluationId: string) => {
     setSelectedEvaluation(evaluationId);

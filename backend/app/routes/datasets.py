@@ -140,7 +140,7 @@ async def upload_dataset(
         raise
     except Exception as e:
         logger.error(f"Error uploading dataset: {e}")
-        raise HTTPException(status_code=500, detail=f"Error uploading dataset: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error uploading dataset")
 
 @router.get("/")
 async def list_datasets(

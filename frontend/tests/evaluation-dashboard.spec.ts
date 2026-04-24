@@ -30,7 +30,7 @@ import { test, expect, Page } from '@playwright/test';
  * a real backend / uploaded model+dataset. The mock covers every
  * field consumed by the dashboard components.
  */
-function buildMockEvaluationResult(overrides: Record<string, any> = {}) {
+function buildMockEvaluationResult(overrides: Record<string, unknown> = {}) {
   return {
     meta_score: 72.5,
     trust_score: 68.41,
@@ -267,7 +267,7 @@ async function injectAuth(page: Page) {
  */
 async function renderDashboardWithMock(
   page: Page,
-  mockResult: Record<string, any>,
+  mockResult: Record<string, unknown>,
 ) {
   // --- Auth ---
   await injectAuth(page);

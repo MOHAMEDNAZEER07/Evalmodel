@@ -4,6 +4,10 @@ This file lists the environment variables and keys used by this project and expl
 
 ## Backend (FastAPI / Server)
 
+- APP_ENV: "development" | "production"
+	- How to set it: use `development` for local work and `production` in deployed environments.
+	- Production guardrails: when `APP_ENV=production`, backend startup enforces strict validation (debug routes disabled, trusted CORS origins only, required Supabase secrets present, and ONNX-only model format policy).
+
 - DATABASE_URL: "postgresql://<DB_USER>:<DB_PASS>@<DB_HOST>:5432/<DB_NAME>"
 	- How to get it: create a Postgres database (managed provider or local). Example providers: Supabase (Database page), AWS RDS, DigitalOcean Managed DB, or local Postgres.
 	- Example (local): after creating DB, build connection string: postgresql://user:pass@host:5432/dbname
@@ -19,6 +23,10 @@ This file lists the environment variables and keys used by this project and expl
 
 - STORAGE_BUCKET_MODELS: "models"
 	- How to get it: Supabase dashboard → Storage → Create a bucket named `models` (or your preferred name). Update `STORAGE_BUCKET_MODELS` with that name.
+
+- ALLOWED_MODEL_FORMATS: "onnx"
+	- How to set it: comma-separated model formats allowed by backend upload and evaluation gates. Example strict production value: `onnx`. Example compatibility mode: `onnx,pkl,joblib,pt,pth,h5`.
+	- Production rule: must be exactly `onnx`.
 
 - SECRET_KEY: "a-long-random-secret-for-session-or-signing"
 	- How to get it: generate a long random string for session signing (e.g., `python -c "import secrets; print(secrets.token_urlsafe(32))"`). Used for cookies/signing.
@@ -98,6 +106,7 @@ SUPABASE_URL="https://your-supabase-project.supabase.co"
 SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
 SUPABASE_ANON_KEY="your-anon-key"
 STORAGE_BUCKET_MODELS="models"
+ALLOWED_MODEL_FORMATS="onnx"
 SECRET_KEY="replace-with-a-long-random-string"
 JWT_SECRET="replace-with-a-long-random-string"
 VITE_MAX_UPLOAD_SIZE_MB=50
@@ -111,6 +120,7 @@ OPENAI_API_KEY="sk-..."
 - Never commit `SUPABASE_SERVICE_ROLE_KEY`, `SECRET_KEY`, `JWT_SECRET`, `DATABASE_URL`, or any credentials to the repo.
 - Use GitHub Actions secrets or your cloud provider's secret manager for CI/CD and deployments.
 - Limit service-role key usage to server-only code paths. Frontend should only use anon/public keys.
+- In production, avoid localhost/wildcard CORS origins and keep `ENABLE_DEBUG_ROUTES=false`.
 
 ## Next steps I can do for you
 

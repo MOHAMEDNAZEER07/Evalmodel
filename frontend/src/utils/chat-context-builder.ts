@@ -5,6 +5,16 @@
 
 import type { EvaluationData, ModelInfo, DatasetInfo } from "@/types/insights-chat";
 
+function toDisplayText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 /**
  * Format all evaluations into a text block for the AI system prompt context.
  */
@@ -55,9 +65,7 @@ export function buildAllEvaluationsContext(
       evalContext += `    Trust Score: ${ev.trust_score.toFixed(2)}/100\n`;
     }
     if (ev.meta_verdict) {
-      const verdictMsg = typeof ev.meta_verdict === 'object'
-        ? (ev.meta_verdict as any).message || (ev.meta_verdict as any).status
-        : ev.meta_verdict;
+      const verdictMsg = ev.meta_verdict.message || ev.meta_verdict.status;
       evalContext += `    Verdict: ${verdictMsg}\n`;
     }
   });
@@ -100,10 +108,10 @@ interface ModelContextParams {
   // Explainability
   featureImportance?: Array<{ feature: string; importance: number; rank: number }>;
   explainabilityMethod?: string;
-  shapSummary?: Record<string, any>;
+  shapSummary?: Record<string, unknown>;
   // Fairness
-  fairnessMetrics?: Record<string, any>;
-  groupMetrics?: Record<string, any>;
+  fairnessMetrics?: Record<string, unknown>;
+  groupMetrics?: Record<string, unknown>;
   sensitiveAttribute?: string;
 }
 
@@ -191,7 +199,7 @@ export function buildContextMessage(
       if (params.sensitiveAttribute) context += `  • Sensitive Attribute: ${params.sensitiveAttribute}\n`;
       if (params.fairnessMetrics) {
         Object.entries(params.fairnessMetrics).forEach(([key, value]) => {
-          context += `  • ${key}: ${typeof value === 'number' ? value.toFixed(4) : JSON.stringify(value)}\n`;
+          context += `  • ${key}: ${typeof value === 'number' ? value.toFixed(4) : toDisplayText(value)}\n`;
         });
       }
       if (params.groupMetrics) {
@@ -213,7 +221,7 @@ export function buildContextMessage(
         });
       }
       if (params.shapSummary) {
-        context += `  • SHAP Summary: ${JSON.stringify(params.shapSummary)}\n`;
+        context += `  • SHAP Summary: ${toDisplayText(params.shapSummary)}\n`;
       }
     }
 

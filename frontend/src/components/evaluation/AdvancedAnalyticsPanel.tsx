@@ -28,7 +28,13 @@ interface FairnessMetrics {
   statistical_parity?: number;
   predictive_parity?: number;
   overall_fairness_score?: number;
-  [key: string]: any;
+  [key: string]: unknown;
+}
+
+interface EvalScoreObject {
+  eval_score?: number;
+  normalized_metrics?: Record<string, number>;
+  weight_distribution?: Record<string, number>;
 }
 
 interface GroupMetric {
@@ -51,7 +57,7 @@ interface FeatureImportance {
 
 interface AdvancedAnalyticsPanelProps {
   metrics?: Metrics;
-  evalScore?: number;
+  evalScore?: number | EvalScoreObject;
   fairnessMetrics?: FairnessMetrics;
   groupMetrics?: GroupMetric[];
   sensitiveAttribute?: string;
@@ -88,9 +94,13 @@ export function AdvancedAnalyticsPanel({
   explainabilityMethod,
   shapSummary,
 }: AdvancedAnalyticsPanelProps) {
-  const hasMetrics = metrics && Object.keys(metrics).some(k => (metrics as any)[k] != null);
+  const hasMetrics = metrics && Object.values(metrics).some((value) => value != null);
   const hasFairness = fairnessMetrics && Object.keys(fairnessMetrics).some(k => fairnessMetrics[k] != null);
   const hasExplainability = featureImportance && featureImportance.length > 0;
+
+  const numericEvalScore = typeof evalScore === "number"
+    ? evalScore
+    : evalScore?.eval_score;
 
   return (
     <Card className="glass-card border-border/60 shadow-sm">
@@ -117,10 +127,8 @@ export function AdvancedAnalyticsPanel({
             <div className="flex items-baseline gap-3 mb-6 pb-4 border-b border-border/40">
               <span className="text-sm text-muted-foreground">SMCP Eval Score</span>
               <span className="text-2xl font-bold tabular-nums text-foreground">
-                {typeof evalScore === "object"
-                  ? ((evalScore as any)?.eval_score?.toFixed(1) ?? "N/A")
-                  : typeof evalScore === "number"
-                  ? (evalScore ?? 0).toFixed(1)
+                {typeof numericEvalScore === "number"
+                  ? numericEvalScore.toFixed(1)
                   : "N/A"}
               </span>
               <span className="text-sm text-muted-foreground">/100</span>

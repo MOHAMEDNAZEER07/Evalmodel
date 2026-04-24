@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -33,6 +33,14 @@ interface Dataset {
 interface ModelDatasetPair {
   modelId: string;
   datasetId: string;
+}
+
+interface ListModelsResponse {
+  models?: Model[];
+}
+
+interface ListDatasetsResponse {
+  datasets?: Dataset[];
 }
 
 interface EvaluationResult {
@@ -134,13 +142,7 @@ const Compare = () => {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  useEffect(() => {
-    if (user) {
-      loadData();
-    }
-  }, [user]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setIsLoading(true);
       const token = sessionStorage.getItem('access_token');
@@ -148,11 +150,11 @@ const Compare = () => {
         apiClient.setToken(token);
       }
 
-      // API client returns unknown — cast result to any for TS and perform runtime checks.
+      // API client returns unknown — cast to expected shapes and apply runtime checks.
       const [modelsResponse, datasetsResponse] = (await Promise.all([
         apiClient.listModels(),
         apiClient.listDatasets()
-      ])) as any;
+      ])) as [ListModelsResponse, ListDatasetsResponse];
 
       // Runtime-safe assignment: ensure expected array shapes before setting state.
       if (modelsResponse && Array.isArray(modelsResponse.models)) {
@@ -176,7 +178,13 @@ const Compare = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    if (user) {
+      void loadData();
+    }
+  }, [user, loadData]);
 
   const handleCompare = async () => {
     if (modelDatasetPairs.length < 2) {

@@ -10,7 +10,7 @@ interface UseSearchOptions<T> {
   items: T[];
   searchFields: (keyof T)[];
   initialQuery?: string;
-  initialFilters?: { field: keyof T; value: any }[];
+  initialFilters?: { field: keyof T; value: unknown }[];
   sortByRelevance?: boolean;
   primarySortField?: keyof T;
 }
@@ -18,14 +18,14 @@ interface UseSearchOptions<T> {
 interface UseSearchReturn<T> {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
-  filters: { field: keyof T; value: any }[];
-  setFilter: (field: keyof T, value: any) => void;
+  filters: { field: keyof T; value: unknown }[];
+  setFilter: (field: keyof T, value: unknown) => void;
   clearFilters: () => void;
   filteredItems: T[];
   resultCount: number;
 }
 
-export function useSearch<T extends Record<string, any>>({
+export function useSearch<T extends Record<string, unknown>>({
   items,
   searchFields,
   initialQuery = '',
@@ -34,9 +34,9 @@ export function useSearch<T extends Record<string, any>>({
   primarySortField = 'name' as keyof T,
 }: UseSearchOptions<T>): UseSearchReturn<T> {
   const [searchQuery, setSearchQuery] = useState(initialQuery);
-  const [filters, setFilters] = useState<{ field: keyof T; value: any }[]>(initialFilters);
+  const [filters, setFilters] = useState<{ field: keyof T; value: unknown }[]>(initialFilters);
 
-  const setFilter = useCallback((field: keyof T, value: any) => {
+  const setFilter = useCallback((field: keyof T, value: unknown) => {
     setFilters((prev) => {
       const existing = prev.find((f) => f.field === field);
       if (existing) {

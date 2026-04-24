@@ -37,7 +37,7 @@ interface RiskValues {
   amplification_applied?: boolean;
   amplification_power?: number;
   fairness_excluded?: boolean;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 interface CalculationTransparencyPanelProps {
@@ -48,7 +48,7 @@ interface CalculationTransparencyPanelProps {
     missing?: number;
     duplicates?: number;
     skew?: number;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   componentScores: ComponentScores;
   riskValues: RiskValues;
@@ -71,7 +71,7 @@ interface CalculationTransparencyPanelProps {
     disparate_impact_ratio?: number;
     equalized_odds_difference?: number;
     overall_fairness_score?: number;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 

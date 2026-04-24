@@ -21,15 +21,28 @@ from supabase import Client
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Allowed file extensions
-ALLOWED_EXTENSIONS = {'.pkl', '.pt', '.pth', '.h5', '.onnx', '.joblib'}
+def get_allowed_model_extensions() -> set[str]:
+    """Return allowed model file extensions from ALLOWED_MODEL_FORMATS."""
+    raw_value = os.getenv("ALLOWED_MODEL_FORMATS", "onnx")
+    formats = {
+        item.strip().lower().lstrip(".")
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+    return {f".{fmt}" for fmt in formats if fmt}
+
+
+def format_allowed_model_extensions() -> str:
+    """Return a user-facing, sorted list of allowed model extensions."""
+    allowed = sorted(get_allowed_model_extensions())
+    return ", ".join(allowed) if allowed else "none"
 
 def validate_model_file(filename: Optional[str]) -> bool:
     """Validate model file extension (accept Optional filename for type-safety)"""
     if not filename:
         return False
     ext = os.path.splitext(filename)[1].lower()
-    return ext in ALLOWED_EXTENSIONS
+    return ext in get_allowed_model_extensions()
 
 @router.post("/upload", response_model=ModelMetadata)
 async def upload_model(
@@ -47,7 +60,18 @@ async def upload_model(
         if not validate_model_file(file.filename):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid file type. Allowed: {ALLOWED_EXTENSIONS}"
+                detail=f"Invalid file type. Allowed: {format_allowed_model_extensions()}"
+            )
+
+        # Validate extension matches declared framework
+        detected_framework = smcp_engine.detect_model_framework(file.filename or "")
+        if detected_framework is not None and detected_framework != framework:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Framework mismatch: file extension maps to '{detected_framework.value}', "
+                    f"but form framework is '{framework.value}'."
+                )
             )
         
         # Check file size
@@ -95,7 +119,7 @@ async def upload_model(
         raise
     except Exception as e:
         logger.error(f"Error uploading model: {e}")
-        raise HTTPException(status_code=500, detail=f"Error uploading model: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error uploading model")
 
 @router.get("/", response_model=ModelListResponse)
 async def list_models(
@@ -168,7 +192,7 @@ async def list_model_versions(
     try:
         # Ensure model belongs to user
         model = supabase.table("models")\
-            .select("id,user_id")\
+            .select("id,user_id,framework")\
             .eq("id", model_id)\
             .single()\
             .execute()
@@ -257,8 +281,23 @@ async def upload_model_version(
         # Validate file
         filename = file.filename or ""
         ext = os.path.splitext(filename)[1].lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {ALLOWED_EXTENSIONS}")
+        if ext not in get_allowed_model_extensions():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Allowed: {format_allowed_model_extensions()}"
+            )
+
+        # Ensure uploaded version framework matches the base model framework
+        detected_framework = smcp_engine.detect_model_framework(filename)
+        model_framework = model.data.get("framework") if model.data else None
+        if detected_framework is not None and model_framework and detected_framework.value != model_framework:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Framework mismatch: file extension maps to '{detected_framework.value}', "
+                    f"but base model framework is '{model_framework}'."
+                )
+            )
 
         content = await file.read()
         file_size = len(content)

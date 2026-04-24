@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Database, Upload, Download, Trash2, GitBranch, Tag, Clock, TrendingUp, Star, Copy, ExternalLink, MoreVertical } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,35 @@ interface Model {
   uploaded_at: string;
 }
 
+interface ApiModel {
+  id: string;
+  name: string;
+  description?: string;
+  model_type: string;
+  framework: string;
+  file_path: string;
+  file_size: number;
+  uploaded_at: string;
+}
+
+interface ListModelsResponse {
+  models?: ApiModel[];
+}
+
+interface DownloadUrlResponse {
+  signed_url?: string;
+  signedURL?: string;
+}
+
+interface ModelVersionsResponse {
+  versions?: ModelVersion[];
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) return error.message;
+  return fallback;
+}
+
 const MODEL_TYPES = [
   { value: 'classification', label: 'Classification', icon: '🎯' },
   { value: 'regression', label: 'Regression', icon: '📈' },
@@ -111,17 +140,13 @@ export default function ModelRegistry() {
     setFilter('model_type', value);
   };
 
-  useEffect(() => {
-    loadModels();
-  }, []);
-
-  const loadModels = async () => {
+  const loadModels = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await apiClient.listModels(100, 0);
+      const response = await apiClient.listModels(100, 0) as ListModelsResponse;
 
       // Mock version data (in real implementation, fetch from model_versions table)
-      const modelsWithVersions = (response.models || []).map((model: any) => ({
+      const modelsWithVersions = (response.models || []).map((model) => ({
         ...model,
         versions: [
           {
@@ -145,17 +170,21 @@ export default function ModelRegistry() {
       }));
 
       setModels(modelsWithVersions);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error loading models:', error);
       toast({
         title: "Error Loading Models",
-        description: error.message || "Failed to load model registry.",
+        description: getErrorMessage(error, "Failed to load model registry."),
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels]);
 
   const handleRegisterVersion = async () => {
     toast({
@@ -167,7 +196,7 @@ export default function ModelRegistry() {
   const handleDownloadModel = async (model: Model, version: ModelVersion) => {
     try {
       toast({ title: "Preparing download...", description: `Requesting download URL for ${model.name} v${version.version}...` });
-      const resp: any = await apiClient.getVersionDownloadUrl(model.id, version.id, 120);
+      const resp = await apiClient.getVersionDownloadUrl(model.id, version.id, 120) as DownloadUrlResponse | string;
       const signed = resp?.signed_url || resp?.signedURL || (typeof resp === 'string' ? resp : null);
       if (!signed) {
         throw new Error('No signed URL returned');
@@ -175,8 +204,8 @@ export default function ModelRegistry() {
       // Open in new tab to download
       window.open(signed, '_blank');
       toast({ title: 'Download started', description: 'A new tab has been opened for the file download' });
-    } catch (error: any) {
-      toast({ title: 'Download Failed', description: error?.message || 'Failed to create download URL', variant: 'destructive' });
+    } catch (error: unknown) {
+      toast({ title: 'Download Failed', description: getErrorMessage(error, 'Failed to create download URL'), variant: 'destructive' });
     }
   };
 
@@ -187,7 +216,7 @@ export default function ModelRegistry() {
 
       // Refresh versions for the selected model if open, and reload summary list
       if (selectedModel && selectedModel.id === model.id) {
-        const res: any = await apiClient.listModelVersions(model.id);
+        const res = await apiClient.listModelVersions(model.id) as ModelVersionsResponse;
         const versions = res?.versions || [];
         setSelectedModel({ ...model, versions, production_version: version.version });
       }
@@ -196,8 +225,8 @@ export default function ModelRegistry() {
       await loadModels();
 
       toast({ title: "Production Update", description: `v${version.version} is now in production.` });
-    } catch (error: any) {
-      toast({ title: "Error", description: error?.message || 'Failed to promote version', variant: 'destructive' });
+    } catch (error: unknown) {
+      toast({ title: "Error", description: getErrorMessage(error, 'Failed to promote version'), variant: 'destructive' });
     }
   };
 
@@ -330,8 +359,8 @@ export default function ModelRegistry() {
                   setRegisterDescription('');
                   setRegisterTags('');
                   await loadModels();
-                } catch (err: any) {
-                  toast({ title: 'Upload failed', description: err?.message || 'Failed to upload model version', variant: 'destructive' });
+                } catch (err: unknown) {
+                  toast({ title: 'Upload failed', description: getErrorMessage(err, 'Failed to upload model version'), variant: 'destructive' });
                 } finally {
                   setIsUploading(false);
                 }
